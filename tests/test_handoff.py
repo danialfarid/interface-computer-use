@@ -93,7 +93,18 @@ def test_local_operator_api_transfers_and_resumes(tmp_path):
 
 
 def test_operator_api_action_is_applied_by_browser_owner_thread(tmp_path):
-    surface = FakeSurface()
+    class UpdatingSurface(FakeSurface):
+        def perform(self, action, locator=None, value=None, timeout_ms=5000):
+            super().perform(action, locator, value, timeout_ms)
+            if action is ActionType.CLICK:
+                self.url = "http://127.0.0.1:8765/member"
+
+        def observe(self):
+            if self.url.endswith("/member"):
+                return SurfaceObservation(self.url, "Member details", "Member details", ())
+            return super().observe()
+
+    surface = UpdatingSurface()
     coordinator = HandoffCoordinator(
         surface,
         GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
@@ -134,6 +145,8 @@ def test_operator_api_action_is_applied_by_browser_owner_thread(tmp_path):
         worker.join()
 
         assert response_body[0]["human_actions"][0]["id"] == "human-search"
+        assert response_body[0]["current_url"].endswith("/member")
+        assert response_body[0]["observation"]["title"] == "Member details"
         assert surface.actions[0][0] is ActionType.CLICK
     finally:
         server.close()

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 from typing import Any, Callable
+from urllib.parse import urljoin
 
 from .models import ActionType, Locator
 from .redaction import redact_text
@@ -90,7 +91,13 @@ class BrowserSurface:
         self.page.on("dialog", self._handle_dialog)
 
     @classmethod
-    def open(cls, url: str, *, headless: bool = True) -> "BrowserSurface":
+    def open(
+        cls,
+        url: str,
+        *,
+        headless: bool = True,
+        navigation_guard: Callable[[str], None] | None = None,
+    ) -> "BrowserSurface":
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:  # pragma: no cover - depends on optional extra
@@ -99,14 +106,24 @@ class BrowserSurface:
                 "and run: playwright install chromium"
             ) from exc
         playwright = sync_playwright().start()
+        surface: BrowserSurface | None = None
         try:
             browser = playwright.chromium.launch(headless=headless)
             context = browser.new_context()
             page = context.new_page()
+            surface = cls(playwright, browser, context, page)
+            if navigation_guard is not None:
+                surface.set_navigation_guard(navigation_guard)
             page.goto(url, wait_until="domcontentloaded")
-            return cls(playwright, browser, context, page)
+            return surface
         except Exception:
-            playwright.stop()
+            if surface is not None:
+                blocked = surface._take_blocked_navigation()
+                surface.close()
+                if blocked is not None:
+                    raise blocked
+            else:
+                playwright.stop()
             raise
 
     @property
@@ -125,11 +142,20 @@ class BrowserSurface:
             self._route_installed = True
 
     def _route_request(self, route: Any, request: Any) -> None:
-        if self._navigation_guard is None or not request.is_navigation_request():
+        is_document = getattr(request, "resource_type", "") == "document"
+        if self._navigation_guard is None or not (request.is_navigation_request() or is_document):
             route.continue_()
             return
         try:
-            self._navigation_guard(str(request.url))
+            request_url = str(request.url)
+            self._navigation_guard(request_url)
+            if is_document:
+                response = route.fetch(max_redirects=0)
+                location = response.headers.get("location")
+                if location:
+                    self._navigation_guard(urljoin(request_url, location))
+                route.fulfill(response=response)
+                return
         except Exception as exc:
             self._blocked_navigation_error = exc
             route.abort(error_code="blockedbyclient")

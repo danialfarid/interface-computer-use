@@ -122,6 +122,11 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
             payload = member_page(member_id)
             status = 200
         elif parsed.path.startswith("/runtime/"):
+            if parsed.path == "/runtime/redirect":
+                self.send_response(302)
+                self.send_header("Location", "/admin")
+                self.end_headers()
+                return
             payload = runtime_page(parsed.path.removeprefix("/runtime/"))
             status = 200 if "Not found" not in payload.decode() else 404
         else:

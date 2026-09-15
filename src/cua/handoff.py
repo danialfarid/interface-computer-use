@@ -198,6 +198,18 @@ class HandoffCoordinator:
                 pending.step.timeout_ms,
             )
         self.policy.check_url(self.surface.url)
+        request.current_url = self.surface.url
+        try:
+            request.observation = self.surface.observe().to_dict()
+        except SurfaceError as exc:
+            request.observation = {
+                "url": request.current_url,
+                "title": "",
+                "text": "",
+                "controls": [],
+                "readable_targets": [],
+                "observation_error": str(exc),
+            }
         action = pending.step.to_dict()
         request.human_actions.append(action)
         self.evidence.event(

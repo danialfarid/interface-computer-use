@@ -14,7 +14,7 @@ from cua.models import (
     Locator,
     RunStatus,
 )
-from cua.policy import GuardrailPolicy
+from cua.policy import GuardrailPolicy, PolicyViolation
 from cua.replay import ReplayRunner
 from cua.surface import BrowserSurface
 
@@ -153,3 +153,13 @@ def test_browser_surface_blocks_forbidden_navigation_before_request(
     assert result.status is RunStatus.HARD_FAILURE
     assert result.error_code == "POLICY_BLOCKED"
     assert "/admin" not in current_url
+
+
+def test_browser_surface_guards_startup_redirects(demo_origin):
+    policy = GuardrailPolicy.local_demo(demo_origin)
+
+    with pytest.raises(PolicyViolation, match="route is not allowlisted"):
+        BrowserSurface.open(
+            f"{demo_origin}/runtime/redirect",
+            navigation_guard=policy.check_url,
+        )

@@ -263,8 +263,8 @@ class DiscoveryRunner:
                 raise SurfaceError(
                     f"output {output_name} was already recorded from a different locator"
                 )
-            self.output_sources[output_name] = locator
             value = self.surface.extract(locator)
+            self.output_sources[output_name] = locator
             self.evidence.event("extraction", name=output_name, value=value)
             self.recorded_steps.append(extract_step)
             return
@@ -318,7 +318,9 @@ class DiscoveryRunner:
             surface_kind=self.surface.kind,
             target={
                 **self.template.target,
-                "url": redact_url(self.template.target["url"]),
+                "url": redact_url(
+                    _parameterize_text(self.template.target["url"], self.parameter_values)
+                ),
             },
             parameters=self.template.parameters,
             outputs=outputs,

@@ -15,7 +15,7 @@ from .handoff import HandoffCoordinator, HandoffServer
 from .llm import LLMError, OpenAICompatibleClient
 from .models import CapabilityArtifact, RunStatus
 from .policy import GuardrailPolicy, PolicyViolation
-from .replay import ReplayRunner
+from .replay import InputValidationError, ReplayRunner, _resolve_value
 from .surface import BrowserSurface, SurfaceError
 from .templates import member_balance_template
 
@@ -83,11 +83,16 @@ def _run_demo_app(host: str, port: int) -> int:
 
 def _run_discover(args: argparse.Namespace) -> int:
     target_url = args.target_url
-    demo_server = _ensure_demo_server(target_url)
-    browser = BrowserSurface.open(target_url, headless=not args.headed)
     evidence = EvidenceRecorder(args.evidence_dir)
     parsed = urlparse(target_url)
     policy = GuardrailPolicy.local_demo(f"{parsed.scheme}://{parsed.netloc}")
+    policy.check_url(target_url)
+    demo_server = _ensure_demo_server(target_url)
+    browser = BrowserSurface.open(
+        target_url,
+        headless=not args.headed,
+        navigation_guard=policy.check_url,
+    )
     template = member_balance_template(target_url)
     handoff_server = None
     try:
@@ -124,7 +129,13 @@ def _run_discover(args: argparse.Namespace) -> int:
 
 def _run_replay(args: argparse.Namespace) -> int:
     artifact = CapabilityArtifact.from_dict(json.loads(args.artifact.read_text(encoding="utf-8")))
+    inputs = _coerce_inputs(_parse_inputs(args.input), artifact)
     target_url = artifact.target["url"]
+    try:
+        target_url = _resolve_value(target_url, inputs) or target_url
+    except InputValidationError:
+        # ReplayRunner still returns the normal structured INVALID_INPUT result.
+        pass
     if artifact.target.get("origin") != DEFAULT_ORIGIN:
         raise ValueError(f"replay target origin must be the approved demo origin: {DEFAULT_ORIGIN}")
     policy = GuardrailPolicy.local_demo(DEFAULT_ORIGIN)
@@ -133,8 +144,12 @@ def _run_replay(args: argparse.Namespace) -> int:
     except PolicyViolation as exc:
         raise ValueError(f"replay target is not an approved local demo URL: {target_url}") from exc
     demo_server = _ensure_demo_server(target_url)
-    browser = BrowserSurface.open(target_url, headless=not args.headed)
     evidence = EvidenceRecorder(args.evidence_dir)
+    browser = BrowserSurface.open(
+        target_url,
+        headless=not args.headed,
+        navigation_guard=policy.check_url,
+    )
     handoff_server = None
     try:
         coordinator = HandoffCoordinator(browser, policy, evidence) if args.handoff else None
@@ -147,7 +162,7 @@ def _run_replay(args: argparse.Namespace) -> int:
             policy,
             evidence,
             artifact,
-            inputs=_parse_inputs(args.input),
+            inputs=inputs,
             handoff=coordinator,
             handoff_wait_s=args.handoff_wait,
         ).run()
@@ -169,6 +184,20 @@ def _parse_inputs(items: list[str]) -> dict[str, str]:
         if not separator or not name:
             raise ValueError(f"input must be NAME=VALUE: {item}")
         result[name] = value
+    return result
+
+
+def _coerce_inputs(inputs: dict[str, str], artifact: CapabilityArtifact) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for name, value in inputs.items():
+        spec = artifact.parameters.get(name)
+        if spec is not None and spec.type == "integer":
+            try:
+                result[name] = int(value)
+            except ValueError as exc:
+                raise ValueError(f"{name} must be an integer") from exc
+        else:
+            result[name] = value
     return result
 
 

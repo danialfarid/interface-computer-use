@@ -36,8 +36,14 @@ class EvidenceRecorder:
     def artifact_file(self, artifact: Any) -> Path:
         """Persist an artifact after the caller has built its typed contract."""
 
+        artifact.validate()
         path = self.directory / "artifact.json"
         payload = redact_artifact_payload(artifact.to_dict())
+        # Validate the exact payload that will be written. Redaction must never
+        # turn a reviewable artifact into a contract the loader cannot accept.
+        from .models import CapabilityArtifact
+
+        CapabilityArtifact.from_dict(payload)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return path
 

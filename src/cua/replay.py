@@ -104,7 +104,7 @@ class ReplayRunner:
 
         outputs: dict[str, Any] = {}
         for step in self.artifact.steps:
-            outputs.update(self._operator_outputs)
+            self._merge_operator_outputs(outputs)
             try:
                 observation = self.surface.observe()
             except SurfaceError as exc:
@@ -147,12 +147,12 @@ class ReplayRunner:
                     continue
                 return self._surface_failure(step, exc)
 
-        outputs.update(self._operator_outputs)
+        self._merge_operator_outputs(outputs)
         try:
             observation = self.surface.observe()
         except SurfaceError as exc:
             if self._try_handoff(ActionStep("final-observation", ActionType.WAIT), exc):
-                outputs.update(self._operator_outputs)
+                self._merge_operator_outputs(outputs)
                 try:
                     observation = self.surface.observe()
                 except SurfaceError as second_exc:
@@ -335,6 +335,11 @@ class ReplayRunner:
             value,
             step.value,
         )
+
+    def _merge_operator_outputs(self, outputs: dict[str, Any]) -> None:
+        for name, value in self._operator_outputs.items():
+            if name not in outputs:
+                outputs[name] = value
 
     def _finish(self, result: RunResult) -> RunResult:
         self.evidence.event("run_finished", result=result.to_dict())
