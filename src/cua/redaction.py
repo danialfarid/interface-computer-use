@@ -11,18 +11,20 @@ _SECRET_PATTERNS = (
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._-]+"),
 )
 _SENSITIVE_FIELDS = re.compile(
-    r"(?i)^(?:api[_-]?key|authorization|account(?:[_-]?number)?|email|member[_-]?id|name|password|phone|secret|ssn|token)$"
+    r"(?i)^(?:api[_-]?key|authorization|account(?:[_-]?number)?|balance|current[_-]?savings[_-]?balance|email|member[_-]?id|name|password|phone|secret|ssn|token)$"
 )
 _PII_PATTERNS = (
     re.compile(r"(?i)\b(?:demo|synthetic)[_-]?(?:member|user)[_-]?\d+\b"),
     re.compile(r"\b\d{4,}\b"),
     re.compile(r"\$\s?[\d,]+(?:\.\d{2})?"),
+    re.compile(r"\b\d[\d,]*\.\d{2}\b"),
     re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"),
     re.compile(r"\b(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b"),
     re.compile(r"(?i)\b\d{1,5}\s+[A-Za-z]{2,}(?:\s+[A-Za-z]{2,}){1,2}\b"),
     re.compile(r"\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b"),
     re.compile(r"\b\d{1,5}\s+[A-Z]{2,}(?:\s+[A-Z]{2,}){1,2}\b"),
     re.compile(r"\b[A-Z]{2,}(?:\s+[A-Z]{2,})+\b"),
+    re.compile(r"(?im)\b(?:member\s+)?(?:name|address)\s*:\s*[^\r\n]+"),
 )
 
 

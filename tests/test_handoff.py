@@ -4,6 +4,8 @@ import json
 import threading
 import time
 
+import pytest
+
 from cua.evidence import EvidenceRecorder
 from cua.handoff import HandoffCoordinator, HandoffServer, HandoffState
 from cua.models import ActionStep, ActionType, Checkpoint, CheckpointKind, Locator
@@ -169,3 +171,24 @@ def test_human_action_callback_can_extend_the_discovery_artifact(tmp_path):
     coordinator.record_human_action(request.intervention_id, step)
 
     assert recorded == [step]
+
+
+def test_expired_handoff_closes_control_and_rejects_late_actions(tmp_path):
+    surface = FakeSurface()
+    coordinator = HandoffCoordinator(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+    )
+    request = coordinator.create_request(
+        goal="goal", capability_id="cap", step="step", reason="stuck", observation=surface.observe()
+    )
+    coordinator.take_control(request.intervention_id, "reviewer")
+
+    assert coordinator.wait_for_resume(request.intervention_id, timeout_s=0) is False
+    assert coordinator.get(request.intervention_id).state == HandoffState.CLOSED
+    with pytest.raises(RuntimeError, match="human must hold"):
+        coordinator.record_human_action(
+            request.intervention_id,
+            ActionStep("late", ActionType.CLICK, Locator("role", "button:Search")),
+        )

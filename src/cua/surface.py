@@ -7,6 +7,7 @@ from typing import Any, Callable
 from urllib.parse import urljoin
 
 from .models import ActionType, Locator
+from .policy import PolicyViolation
 from .redaction import redact_text
 
 
@@ -143,19 +144,22 @@ class BrowserSurface:
 
     def _route_request(self, route: Any, request: Any) -> None:
         is_document = getattr(request, "resource_type", "") == "document"
-        if self._navigation_guard is None or not (request.is_navigation_request() or is_document):
+        is_protected = request.is_navigation_request() or is_document or getattr(
+            request, "resource_type", ""
+        ) in {"fetch", "xhr"}
+        if self._navigation_guard is None or not is_protected:
             route.continue_()
             return
         try:
             request_url = str(request.url)
             self._navigation_guard(request_url)
-            if is_document:
-                response = route.fetch(max_redirects=0)
-                location = response.headers.get("location")
-                if location:
-                    self._navigation_guard(urljoin(request_url, location))
-                route.fulfill(response=response)
-                return
+            response = route.fetch(max_redirects=0)
+            location = response.headers.get("location")
+            if location:
+                self._navigation_guard(urljoin(request_url, location))
+                raise PolicyViolation("redirect responses are not permitted by the route allowlist")
+            route.fulfill(response=response)
+            return
         except Exception as exc:
             self._blocked_navigation_error = exc
             route.abort(error_code="blockedbyclient")
@@ -215,10 +219,10 @@ class BrowserSurface:
                     href: el.getAttribute('href') || ''};
                 }"""
             )
-            if not info["text"] and not info["aria"] and not info["label"]:
+            if not info["text"] and not info["aria"] and not info["label"] and not info["name"] and not info["id"]:
                 continue
             locator = self._stable_locator(info)
-            name = info["aria"] or info["label"] or info["text"]
+            name = info["aria"] or info["label"] or info["text"] or info["name"] or info["id"]
             result.append(Control(f"control-{index}", info["role"], name, locator))
         return result
 
@@ -269,6 +273,12 @@ class BrowserSurface:
                 "role",
                 f"{info['role']}:{info['text']}",
                 rationale="Accessible role and visible name survive table/layout changes.",
+            )
+        if info["aria"]:
+            return Locator(
+                "css",
+                f'{info["tag"]}[aria-label={_quote_css(info["aria"])}]',
+                rationale="ARIA label fallback for controls without an associated label.",
             )
         if info["name"]:
             return Locator(

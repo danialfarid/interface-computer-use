@@ -4,9 +4,9 @@ import argparse
 import json
 from pathlib import Path
 import sys
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from .demo_app import serve
 from .discovery import DiscoveryRunner
@@ -205,9 +205,19 @@ def _ensure_demo_server(target_url: str):
     parsed = urlparse(target_url)
     if parsed.hostname not in {"127.0.0.1", "localhost"}:
         return None
-    try:
-        with urlopen(target_url, timeout=0.5):
+    probe_url = f"{parsed.scheme}://{parsed.netloc}/"
+
+    class _NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self, _request, _fp, _code, _msg, _headers, _new_url):
             return None
+
+    try:
+        with build_opener(_NoRedirect).open(Request(probe_url), timeout=0.5):
+            return None
+    except HTTPError:
+        # Any HTTP response proves that the local server is already listening;
+        # do not follow a route or redirect merely to check availability.
+        return None
     except (OSError, URLError):
         if parsed.port is None:
             raise OSError("local target URL must include a port when starting the demo app")

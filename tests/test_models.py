@@ -36,6 +36,7 @@ def test_capability_round_trips_without_runtime_values():
                 "{{member_id}}",
             ),
             ActionStep("search", ActionType.CLICK, Locator("role", "button:Search")),
+            ActionStep("read", ActionType.EXTRACT, Locator("text", "balance-value"), "balance"),
         ),
         checkpoint=Checkpoint(
             CheckpointKind.TEXT_PRESENT,

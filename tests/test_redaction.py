@@ -1,3 +1,6 @@
+import json
+
+from cua.evidence import EvidenceRecorder
 from cua.redaction import redact_artifact_payload, redact_text, redact_value
 
 
@@ -54,3 +57,14 @@ def test_artifact_redaction_preserves_executable_fields_while_removing_url_crede
     assert "member=1001" in redacted["target"]["url"]
     assert redacted["steps"][0]["target"]["value"] == "Member Number"
     assert redacted["steps"][0]["value"] == "{{member_id}}"
+
+
+def test_evidence_redacts_fill_values_even_when_they_are_not_recognizable_pii(tmp_path):
+    evidence = EvidenceRecorder(tmp_path)
+    evidence.event(
+        "human_action",
+        step={"action": "fill", "value": "jane example"},
+    )
+
+    record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
+    assert record["payload"]["step"]["value"] == "<REDACTED>"

@@ -61,6 +61,9 @@ class ReplayRunner:
         self.handoff_wait_s = handoff_wait_s
         self._handoff_used = False
         self._operator_outputs: dict[str, Any] = {}
+        self.evidence.sensitive_names.update(
+            name for name, spec in self.artifact.outputs.items() if spec.sensitive
+        )
         set_navigation_guard = getattr(self.surface, "set_navigation_guard", None)
         if callable(set_navigation_guard):
             set_navigation_guard(self.policy.check_url)
@@ -179,9 +182,39 @@ class ReplayRunner:
                 "replay did not produce declared output(s): " + ", ".join(missing_outputs),
             )
         if not self._checkpoint_matches(observation):
+            checkpoint_step = ActionStep("checkpoint", ActionType.WAIT)
+            if self._try_handoff(
+                checkpoint_step,
+                SurfaceError("replay checkpoint was not met"),
+            ):
+                self._merge_operator_outputs(outputs)
+                try:
+                    observation = self.surface.observe()
+                except SurfaceError as exc:
+                    return self._surface_failure(checkpoint_step, exc)
+                if self._business_outcome(observation) is not None:
+                    business = self._business_outcome(observation)
+                    return self._finish(
+                        RunResult(
+                            RunStatus.BUSINESS_OUTCOME,
+                            self.evidence.run_id,
+                            outcome_code=business[0],
+                            message=business[1],
+                            evidence_dir=str(self.evidence.directory),
+                        )
+                    )
+                if self._checkpoint_matches(observation):
+                    return self._finish(
+                        RunResult(
+                            RunStatus.SUCCESS,
+                            self.evidence.run_id,
+                            outputs=outputs,
+                            evidence_dir=str(self.evidence.directory),
+                        )
+                    )
             self.evidence.failure_snapshot(self.surface, "failure-checkpoint")
             return self._failure(
-                ActionStep("checkpoint", ActionType.WAIT),
+                checkpoint_step,
                 "CHECKPOINT_NOT_MET",
                 self.artifact.checkpoint.description,
             )
@@ -337,9 +370,8 @@ class ReplayRunner:
         )
 
     def _merge_operator_outputs(self, outputs: dict[str, Any]) -> None:
-        for name, value in self._operator_outputs.items():
-            if name not in outputs:
-                outputs[name] = value
+        outputs.update(self._operator_outputs)
+        self._operator_outputs.clear()
 
     def _finish(self, result: RunResult) -> RunResult:
         self.evidence.event("run_finished", result=result.to_dict())

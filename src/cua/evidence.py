@@ -17,14 +17,27 @@ class EvidenceRecorder:
         self.directory = root / self.run_id
         self.directory.mkdir(parents=True, exist_ok=True)
         self.log_path = self.directory / "events.jsonl"
+        self.sensitive_names: set[str] = set()
 
     def event(self, kind: str, **payload: Any) -> None:
+        sensitive_output = payload.get("name") in self.sensitive_names
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "run_id": self.run_id,
             "kind": kind,
             "payload": redact_value(kind, payload),
         }
+        redacted_step = record["payload"].get("step")
+        raw_step = payload.get("step")
+        if (
+            isinstance(redacted_step, dict)
+            and isinstance(raw_step, dict)
+            and raw_step.get("action") in {"fill", "navigate"}
+            and "value" in redacted_step
+        ):
+            redacted_step["value"] = "<REDACTED>"
+        if sensitive_output and "value" in record["payload"]:
+            record["payload"]["value"] = "<REDACTED>"
         with self.log_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
 

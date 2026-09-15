@@ -85,6 +85,9 @@ class DiscoveryRunner:
         self.recorded_steps: list[ActionStep] = []
         self.output_sources: dict[str, Locator] = {}
         self._handoff_used = False
+        self.evidence.sensitive_names.update(
+            name for name, spec in self.template.output_descriptions.items() if spec[2]
+        )
         set_navigation_guard = getattr(self.surface, "set_navigation_guard", None)
         if callable(set_navigation_guard):
             set_navigation_guard(self.policy.check_url)
@@ -186,6 +189,13 @@ class DiscoveryRunner:
                         self.evidence.event("run_finished", result=result.to_dict())
                         return result, artifact
                     self.evidence.failure_snapshot(self.surface, f"failure-checkpoint-{step_number}")
+                    if self._try_handoff(
+                        goal,
+                        f"checkpoint-{step_number}",
+                        "discovery checkpoint was not met",
+                        current,
+                    ):
+                        continue
                     return self._failure(
                         RunStatus.HARD_FAILURE,
                         f"decision-{step_number}",
@@ -270,7 +280,11 @@ class DiscoveryRunner:
             return
 
         runtime_value = action.value
-        artifact_value = _parameterize_text(runtime_value, self.parameter_values) if runtime_value is not None else None
+        artifact_value = (
+            _parameterize_persisted_value(runtime_value, self.parameter_values, action.action)
+            if runtime_value is not None
+            else None
+        )
         if action.action is ActionType.NAVIGATE:
             if runtime_value is None:
                 raise SurfaceError("navigate requires a value")
@@ -347,7 +361,7 @@ class DiscoveryRunner:
             recorded = replace(
                 step,
                 value=(
-                    _parameterize_text(step.value, self.parameter_values)
+                    _parameterize_persisted_value(step.value, self.parameter_values, step.action)
                     if step.value is not None
                     else None
                 ),
@@ -422,3 +436,17 @@ def _parameterize_text(value: str, parameter_values: dict[str, str]) -> str:
         else:
             result = result.replace(actual, replacement)
     return result
+
+
+def _parameterize_persisted_value(
+    value: str,
+    parameter_values: dict[str, str],
+    action: ActionType,
+) -> str:
+    result = _parameterize_text(value, parameter_values)
+    if action is ActionType.FILL and result == value and not _PARAMETER.fullmatch(value):
+        raise SurfaceError("refusing to persist an unparameterized fill value")
+    return result
+
+
+_PARAMETER = re.compile(r"\{\{[A-Za-z_][A-Za-z0-9_]*\}\}")

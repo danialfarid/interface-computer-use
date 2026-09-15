@@ -119,6 +119,7 @@ def test_browser_surface_reports_unexpected_confirmation_dialog(tmp_path, demo_o
     ("action", "locator", "value"),
     [
         (ActionType.CLICK, Locator("css", "#js-nav"), None),
+        (ActionType.CLICK, Locator("css", "#fetch-nav"), None),
         (ActionType.CLICK, Locator("css", "#form-nav"), None),
         (ActionType.PRESS, Locator("css", "#enter-nav"), "Enter"),
     ],
@@ -155,11 +156,12 @@ def test_browser_surface_blocks_forbidden_navigation_before_request(
     assert "/admin" not in current_url
 
 
-def test_browser_surface_guards_startup_redirects(demo_origin):
+@pytest.mark.parametrize("state", ["redirect", "redirect-one"])
+def test_browser_surface_guards_startup_redirects(demo_origin, state):
     policy = GuardrailPolicy.local_demo(demo_origin)
 
-    with pytest.raises(PolicyViolation, match="route is not allowlisted"):
+    with pytest.raises(PolicyViolation, match="allowlist"):
         BrowserSurface.open(
-            f"{demo_origin}/runtime/redirect",
+            f"{demo_origin}/runtime/{state}",
             navigation_guard=policy.check_url,
         )

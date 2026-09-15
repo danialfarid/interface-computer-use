@@ -12,3 +12,6 @@ def test_stable_locator_prefers_label_then_role_then_named_css():
     assert BrowserSurface._stable_locator(
         {"label": "", "role": "input", "text": "", "aria": "", "name": "member", "tag": "input", "id": "", "href": ""}
     ).value == 'input[name="member"]'
+    assert BrowserSurface._stable_locator(
+        {"label": "", "role": "input", "text": "Member ID", "aria": "Member ID", "name": "", "tag": "input", "id": "", "href": ""}
+    ).value == 'input[aria-label="Member ID"]'

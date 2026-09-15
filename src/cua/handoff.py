@@ -244,6 +244,13 @@ class HandoffCoordinator:
                     return request.state == HandoffState.RESUMED
                 remaining = expires_at - time.monotonic()
                 if remaining <= 0:
+                    request.state = HandoffState.CLOSED
+                    self._condition.notify_all()
+                    self.evidence.event(
+                        "intervention_expired",
+                        intervention_id=intervention_id,
+                        operator=request.operator,
+                    )
                     return False
                 self._condition.wait(timeout=min(0.1, remaining))
 

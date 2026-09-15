@@ -98,6 +98,7 @@ def runtime_page(state: str) -> bytes:
             """
             <h2>Hostile navigation fixtures</h2>
             <button id="js-nav" onclick="location.href='/admin'">Script navigation</button>
+            <button id="fetch-nav" onclick="fetch('/admin?member=1001')">Script fetch</button>
             <form method="get" action="/member">
               <button id="form-nav" type="submit" formaction="/admin">Form override</button>
             </form>
@@ -123,6 +124,16 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
             status = 200
         elif parsed.path.startswith("/runtime/"):
             if parsed.path == "/runtime/redirect":
+                self.send_response(302)
+                self.send_header("Location", "/admin")
+                self.end_headers()
+                return
+            if parsed.path == "/runtime/redirect-one":
+                self.send_response(302)
+                self.send_header("Location", "/runtime/redirect-two")
+                self.end_headers()
+                return
+            if parsed.path == "/runtime/redirect-two":
                 self.send_response(302)
                 self.send_header("Location", "/admin")
                 self.end_headers()

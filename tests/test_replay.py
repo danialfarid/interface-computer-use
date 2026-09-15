@@ -135,7 +135,7 @@ def test_replay_rejects_success_when_declared_output_was_not_extracted(tmp_path)
     ).run()
 
     assert result.status is RunStatus.HARD_FAILURE
-    assert result.error_code == "OUTPUTS_MISSING"
+    assert result.error_code == "INVALID_ARTIFACT"
 
 
 def test_snapshot_failure_does_not_mask_structured_surface_failure(tmp_path):

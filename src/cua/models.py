@@ -206,6 +206,7 @@ class CapabilityArtifact:
                 raise ValueError(f"unsupported output type for {name}: {spec.type}")
         if not self.steps:
             raise ValueError("a capability must contain at least one step")
+        extracted_outputs: set[str] = set()
         for step in self.steps:
             if not step.id or step.timeout_ms < 1:
                 raise ValueError(f"step {step.id!r} must have a positive timeout")
@@ -214,6 +215,10 @@ class CapabilityArtifact:
                     raise ValueError(f"extract step {step.id} must name a declared output")
                 if self.outputs[step.value].source != step.target:
                     raise ValueError(f"extract step {step.id} does not match its output source")
+                extracted_outputs.add(step.value)
+        missing_outputs = sorted(set(self.outputs) - extracted_outputs)
+        if missing_outputs:
+            raise ValueError("declared output(s) have no extraction step: " + ", ".join(missing_outputs))
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "CapabilityArtifact":
