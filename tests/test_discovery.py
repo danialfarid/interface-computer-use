@@ -115,3 +115,25 @@ def test_discovery_returns_business_outcome_without_crashing(tmp_path):
     assert result.status is RunStatus.BUSINESS_OUTCOME
     assert result.outcome_code == "MEMBER_NOT_FOUND"
     assert artifact is None
+
+
+def test_model_null_string_is_not_treated_as_a_target_id():
+    decision = AgentDecision.from_dict(
+        {
+            "actions": [
+                {
+                    "action": "click",
+                    "control_id": "control-1",
+                    "target_id": "null",
+                    "value": "null",
+                    "output_name": "null",
+                    "reason": "search",
+                    "risk": "safe",
+                }
+            ],
+            "done": False,
+            "message": "",
+        }
+    )
+    assert decision.actions[0].target_id is None
+    assert decision.actions[0].value is None

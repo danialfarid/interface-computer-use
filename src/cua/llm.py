@@ -99,10 +99,10 @@ class AgentDecision:
                 actions.append(
                     AgentAction(
                         action=ActionType(str(item["action"])),
-                        control_id=str(item["control_id"]) if item.get("control_id") is not None else None,
-                        target_id=str(item["target_id"]) if item.get("target_id") is not None else None,
-                        value=str(item["value"]) if item.get("value") is not None else None,
-                        output_name=str(item["output_name"]) if item.get("output_name") is not None else None,
+                        control_id=_nullable_string(item.get("control_id")),
+                        target_id=_nullable_string(item.get("target_id")),
+                        value=_nullable_string(item.get("value")),
+                        output_name=_nullable_string(item.get("output_name")),
                         reason=str(item.get("reason", "")),
                         risk=RiskClass(str(item.get("risk", RiskClass.SAFE.value))),
                     )
@@ -202,3 +202,11 @@ class OpenAICompatibleClient:
             raise LLMError(f"LLM request failed: {exc}") from exc
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
             raise LLMError(f"LLM returned an invalid decision payload: {exc}") from exc
+
+
+def _nullable_string(value: Any) -> str | None:
+    """Accept a common JSON-mode quirk without treating it as a control id."""
+
+    if value is None or value == "null":
+        return None
+    return str(value)
