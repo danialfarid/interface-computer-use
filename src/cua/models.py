@@ -222,6 +222,13 @@ class CapabilityArtifact:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "CapabilityArtifact":
+        try:
+            return cls._from_dict(value)
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"invalid capability artifact: {exc}") from exc
+
+    @classmethod
+    def _from_dict(cls, value: Mapping[str, Any]) -> "CapabilityArtifact":
         parameters = {
             name: ParameterSpec(**dict(spec))
             for name, spec in dict(value.get("parameters", {})).items()

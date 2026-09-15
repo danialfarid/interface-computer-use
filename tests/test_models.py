@@ -71,6 +71,25 @@ def test_capability_rejects_unknown_schema_version():
         CapabilityArtifact.from_dict(payload)
 
 
+def test_capability_normalizes_missing_contract_fields_to_value_error():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={},
+        outputs={},
+        steps=(ActionStep("wait", ActionType.WAIT),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+    payload = json.loads(artifact.to_json())
+    del payload["checkpoint"]
+
+    with pytest.raises(ValueError, match="invalid capability artifact"):
+        CapabilityArtifact.from_dict(payload)
+
+
 def test_capability_requires_extract_step_to_match_declared_output_source():
     artifact = CapabilityArtifact(
         capability_id="cap",

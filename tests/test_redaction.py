@@ -61,6 +61,15 @@ def test_evidence_redacts_readable_target_text_without_capitalization(tmp_path):
     assert "jane example" not in payload
 
 
+def test_evidence_redacts_uri_encoded_sensitive_values(tmp_path):
+    evidence = EvidenceRecorder(tmp_path)
+    evidence.sensitive_values.add("ab cd")
+    evidence.event("observation", url="http://127.0.0.1:8765/member?member=ab%20cd")
+
+    record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
+    assert "ab%20cd" not in json.dumps(record["payload"])
+
+
 def test_redaction_masks_named_sensitive_scalar_values_including_numbers():
     value = {
         "member_id": 1001,

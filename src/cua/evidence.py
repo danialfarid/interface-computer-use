@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, quote_plus
 import uuid
 
 from .redaction import redact_artifact_payload, redact_url, redact_value
@@ -23,7 +24,13 @@ def _redact_sensitive_names(value: Any, names: set[str]) -> Any:
 def _redact_sensitive_values(value: Any, sensitive_values: set[str]) -> Any:
     if isinstance(value, str):
         result = value
-        for secret in sorted((item for item in sensitive_values if item), key=len, reverse=True):
+        variants = {
+            variant
+            for item in sensitive_values
+            if item
+            for variant in (item, quote(item, safe=""), quote_plus(item))
+        }
+        for secret in sorted(variants, key=len, reverse=True):
             result = result.replace(secret, "<REDACTED>")
         return result
     if isinstance(value, dict):

@@ -209,6 +209,12 @@ def test_parameterization_does_not_replace_short_numeric_ids_inside_other_values
     assert _parameterize_text("/member?member=1001", {"member_id": "10"}) == "/member?member=1001"
 
 
+def test_parameterization_handles_uri_encoded_input_values():
+    assert _parameterize_text(
+        "/member?member=ab%20cd", {"member_id": "ab cd"}
+    ) == "/member?member={{member_id}}"
+
+
 def test_human_discovery_action_is_parameterized_before_artifact_recording(tmp_path):
     surface = FakeSurface()
     coordinator = HandoffCoordinator(
@@ -394,6 +400,72 @@ def test_discovery_accepts_complete_human_work_after_llm_error(tmp_path):
     assert not operator_errors
     assert result.status is RunStatus.SUCCESS
     assert artifact is not None
+
+
+def test_discovery_reports_business_outcome_after_llm_error_handoff(tmp_path):
+    class NotFoundSurface(FakeSurface):
+        def observe(self):
+            if self.page == "not-found":
+                return SurfaceObservation(self.url, "Member not found", "Member not found", ())
+            return super().observe()
+
+        def perform(self, action, locator=None, value=None, timeout_ms=5000):
+            super().perform(action, locator, value, timeout_ms)
+            if action is ActionType.CLICK and self.seen_member == "9999":
+                self.page = "not-found"
+
+        @property
+        def seen_member(self):
+            fills = [value for action, _locator, value in self.actions if action is ActionType.FILL]
+            return fills[-1] if fills else None
+
+    surface = NotFoundSurface()
+    policy = GuardrailPolicy.local_demo("http://127.0.0.1:8765")
+    coordinator = HandoffCoordinator(surface, policy, EvidenceRecorder(tmp_path / "handoff"))
+    operator_errors = []
+
+    def operator():
+        try:
+            while not coordinator.list_requests():
+                time.sleep(0.01)
+            request = coordinator.list_requests()[0]
+            coordinator.take_control(request.intervention_id, "reviewer")
+            coordinator.record_human_action(
+                request.intervention_id,
+                ActionStep("human-fill", ActionType.FILL, Locator("label", "Member ID"), "9999"),
+            )
+            coordinator.record_human_action(
+                request.intervention_id,
+                ActionStep("human-search", ActionType.CLICK, Locator("role", "button:Search")),
+            )
+            coordinator.resume(request.intervention_id)
+        except Exception as exc:
+            operator_errors.append(exc)
+
+    class FailingClient:
+        def decide(self, _goal, _observation):
+            raise LLMError("provider unavailable")
+
+    worker = threading.Thread(target=operator)
+    worker.start()
+    result, artifact = DiscoveryRunner(
+        surface,
+        FailingClient(),
+        policy,
+        EvidenceRecorder(tmp_path / "discovery"),
+        _template(),
+        parameter_values={"member_id": "9999"},
+        max_steps=1,
+        handoff=coordinator,
+        handoff_wait_s=2,
+    ).run("look up member 9999")
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert not operator_errors
+    assert result.status is RunStatus.BUSINESS_OUTCOME
+    assert result.outcome_code == "MEMBER_NOT_FOUND"
+    assert artifact is None
 
 
 def test_discovery_rejects_sensitive_target_query_values(tmp_path):

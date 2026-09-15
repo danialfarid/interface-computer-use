@@ -116,7 +116,7 @@ class BrowserSurface:
         surface: BrowserSurface | None = None
         try:
             browser = playwright.chromium.launch(headless=headless)
-            context = browser.new_context()
+            context = browser.new_context(service_workers="block")
             page = context.new_page()
             surface = cls(playwright, browser, context, page)
             if navigation_guard is not None:
@@ -583,6 +583,15 @@ def _worker_websocket_prefix(origins: tuple[str, ...], route_prefixes: tuple[str
     );
   };
   const ports = [];
+  const rejectNestedWorkers = (name) => {
+    const Constructor = self[name];
+    if (!Constructor) return;
+    self[name] = function() {
+      throw new Error('nested workers are disabled by policy');
+    };
+  };
+  rejectNestedWorkers('Worker');
+  rejectNestedWorkers('SharedWorker');
   if (typeof self.addEventListener === 'function') {
     self.addEventListener('connect', (event) => {
       for (const port of event.ports || []) {

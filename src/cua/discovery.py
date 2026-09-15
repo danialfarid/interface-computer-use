@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 import re
 from typing import Protocol
+from urllib.parse import quote, quote_plus
 
 from .evidence import EvidenceRecorder
 from .handoff import HandoffCoordinator
@@ -243,37 +244,11 @@ class DiscoveryRunner:
                             )
                         except (UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError) as exc:
                             return self._surface_failure(f"checkpoint-{step_number}", exc)
-                        if self._checkpoint_matches(resumed):
-                            missing_outputs = sorted(
-                                set(self.template.output_descriptions) - set(self.output_sources)
-                            )
-                            if missing_outputs:
-                                return self._failure(
-                                    RunStatus.HARD_FAILURE,
-                                    f"decision-{step_number}",
-                                    "OUTPUTS_MISSING",
-                                    "discovery did not record required output(s): "
-                                    + ", ".join(missing_outputs),
-                                )
-                            try:
-                                artifact = self._artifact()
-                                artifact.validate()
-                                self.evidence.artifact_file(artifact)
-                            except ValueError as exc:
-                                return self._failure(
-                                    RunStatus.HARD_FAILURE,
-                                    f"decision-{step_number}",
-                                    "INVALID_ARTIFACT",
-                                    str(exc),
-                                )
-                            result = RunResult(
-                                status=RunStatus.SUCCESS,
-                                run_id=self.evidence.run_id,
-                                outputs={"declared": sorted(self.output_sources)},
-                                evidence_dir=str(self.evidence.directory),
-                            )
-                            self.evidence.event("run_finished", result=result.to_dict())
-                            return result, artifact
+                        completed = self._complete_after_handoff(
+                            f"checkpoint-{step_number}", resumed
+                        )
+                        if completed is not None:
+                            return completed
                         continue
                     return self._failure(
                         RunStatus.HARD_FAILURE,
@@ -321,23 +296,9 @@ class DiscoveryRunner:
                 return self._failure(RunStatus.HARD_FAILURE, "post-handoff", "POLICY_BLOCKED", str(exc))
             except SurfaceError as exc:
                 return self._surface_failure("post-handoff", exc)
-            if self._checkpoint_matches(resumed_observation) and not (
-                set(self.template.output_descriptions) - set(self.output_sources)
-            ):
-                try:
-                    artifact = self._artifact()
-                    artifact.validate()
-                    self.evidence.artifact_file(artifact)
-                except ValueError as exc:
-                    return self._failure(RunStatus.HARD_FAILURE, "post-handoff", "INVALID_ARTIFACT", str(exc))
-                result = RunResult(
-                    status=RunStatus.SUCCESS,
-                    run_id=self.evidence.run_id,
-                    outputs={"declared": sorted(self.output_sources)},
-                    evidence_dir=str(self.evidence.directory),
-                )
-                self.evidence.event("run_finished", result=result.to_dict())
-                return result, artifact
+            completed = self._complete_after_handoff("post-handoff", resumed_observation)
+            if completed is not None:
+                return completed
 
     def _execute_action(
         self,
@@ -516,12 +477,24 @@ class DiscoveryRunner:
         return True
 
     def _complete_after_handoff(
-        self, step: str
+        self, step: str, observation: SurfaceObservation | None = None
     ) -> tuple[RunResult, CapabilityArtifact | None] | None:
-        try:
-            observation = self.surface.observe()
-        except (PolicyViolation, UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError):
-            return None
+        if observation is None:
+            try:
+                observation = self.surface.observe()
+            except (PolicyViolation, UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError):
+                return None
+        business = self._business_outcome(observation)
+        if business is not None:
+            result = RunResult(
+                status=RunStatus.BUSINESS_OUTCOME,
+                run_id=self.evidence.run_id,
+                outcome_code=business.code,
+                message=business.description,
+                evidence_dir=str(self.evidence.directory),
+            )
+            self.evidence.event("run_finished", result=result.to_dict())
+            return result, None
         if not self._checkpoint_matches(observation):
             return None
         missing_outputs = sorted(set(self.template.output_descriptions) - set(self.output_sources))
@@ -575,11 +548,15 @@ def _safe_description(value: str, parameter_values: dict[str, str]) -> str:
 def _parameterize_text(value: str, parameter_values: dict[str, str]) -> str:
     result = value
     for name, actual in sorted(parameter_values.items(), key=lambda item: len(item[1]), reverse=True):
+        if not actual:
+            continue
         replacement = "{{" + name + "}}"
-        if actual.isdigit():
-            result = re.sub(rf"(?<!\d){re.escape(actual)}(?!\d)", replacement, result)
-        else:
-            result = result.replace(actual, replacement)
+        candidates = sorted({actual, quote(actual, safe=""), quote_plus(actual)}, key=len, reverse=True)
+        for candidate in candidates:
+            if candidate == actual and actual.isdigit():
+                result = re.sub(rf"(?<!\d){re.escape(actual)}(?!\d)", replacement, result)
+            else:
+                result = result.replace(candidate, replacement)
     return result
 
 
