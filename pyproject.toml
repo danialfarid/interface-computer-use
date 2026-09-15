@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "interface-computer-use"
+version = "0.1.0"
+description = "A small, safety-first computer-use discovery and deterministic replay system"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+browser = ["playwright>=1.45"]
+llm = ["openai>=1.40"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+cua = "cua.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

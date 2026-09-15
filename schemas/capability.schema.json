@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Computer-use capability artifact",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "artifact_version",
+    "capability_id",
+    "name",
+    "description",
+    "surface_kind",
+    "target",
+    "parameters",
+    "outputs",
+    "steps",
+    "checkpoint",
+    "business_outcomes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "artifact_version": {"type": "integer", "minimum": 1},
+    "capability_id": {"type": "string", "minLength": 1},
+    "name": {"type": "string", "minLength": 1},
+    "description": {"type": "string"},
+    "surface_kind": {"type": "string"},
+    "target": {"type": "object", "additionalProperties": {"type": "string"}},
+    "parameters": {"type": "object"},
+    "outputs": {"type": "object"},
+    "steps": {"type": "array", "minItems": 1},
+    "checkpoint": {"type": "object"},
+    "business_outcomes": {"type": "array"},
+    "created_at": {"type": "string"}
+  },
+  "additionalProperties": false
+}
