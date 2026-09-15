@@ -1,7 +1,10 @@
 from pathlib import Path
 from dataclasses import replace
+import threading
+import time
 
 from cua.evidence import EvidenceRecorder
+from cua.handoff import HandoffCoordinator, HandoffState
 from cua.models import (
     ActionStep,
     ActionType,
@@ -16,7 +19,7 @@ from cua.models import (
 )
 from cua.policy import GuardrailPolicy
 from cua.replay import ReplayRunner
-from cua.surface import SurfaceError, SurfaceObservation
+from cua.surface import SurfaceError, SurfaceObservation, SurfaceTimeout
 
 
 class FakeReplaySurface:
@@ -64,7 +67,7 @@ def artifact():
         parameters={"member_id": ParameterSpec("string", "Synthetic member identifier")},
         outputs={
             "balance": OutputSpec(
-                "string", "Current savings balance", Locator("text", "Current savings balance")
+                "string", "Current savings balance", Locator("css", "#balance-value")
             )
         },
         steps=(
@@ -154,3 +157,113 @@ def test_snapshot_failure_does_not_mask_structured_surface_failure(tmp_path):
     assert result.status is RunStatus.HARD_FAILURE
     assert result.error_code == "SURFACE_ERROR"
     assert result.failed_step == "fill"
+
+
+def test_replay_preflights_a_click_destination_before_performing_it(tmp_path):
+    class ForbiddenDestinationSurface(FakeReplaySurface):
+        def preview_url(self, locator, timeout_ms=5000):
+            return "http://127.0.0.1:8765/admin"
+
+    surface = ForbiddenDestinationSurface()
+    result = ReplayRunner(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+        artifact(),
+        inputs={"member_id": "1001"},
+    ).run()
+
+    assert result.error_code == "POLICY_BLOCKED"
+    assert surface.seen_values == ["1001"]
+    assert surface.page == "home"
+
+
+def test_replay_succeeds_after_transient_timeout_recovery(tmp_path):
+    class FlakySurface(FakeReplaySurface):
+        failures_left = 2
+
+        def perform(self, action, locator=None, value=None, timeout_ms=5000):
+            if action is ActionType.FILL and self.failures_left:
+                self.failures_left -= 1
+                raise SurfaceTimeout("temporary slowness")
+            super().perform(action, locator, value, timeout_ms)
+
+    result = ReplayRunner(
+        FlakySurface(),
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+        artifact(),
+        inputs={"member_id": "1001"},
+    ).run()
+
+    assert result.status is RunStatus.SUCCESS
+
+
+def test_replay_observation_failure_is_structured(tmp_path):
+    class BrokenObservationSurface(FakeReplaySurface):
+        def observe(self):
+            raise SurfaceError("page closed while observing")
+
+    result = ReplayRunner(
+        BrokenObservationSurface(),
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+        artifact(),
+        inputs={"member_id": "1001"},
+    ).run()
+
+    assert result.status is RunStatus.HARD_FAILURE
+    assert result.error_code == "SURFACE_ERROR"
+
+
+def test_replay_can_resume_after_same_session_human_takeover(tmp_path):
+    class FailingOnceSurface(FakeReplaySurface):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        def perform(self, action, locator=None, value=None, timeout_ms=5000):
+            if action is ActionType.FILL and not self.failed:
+                self.failed = True
+                raise SurfaceError("field became unavailable")
+            super().perform(action, locator, value, timeout_ms)
+
+    surface = FailingOnceSurface()
+    coordinator = HandoffCoordinator(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path / "handoff"),
+    )
+    operator_errors = []
+
+    def operator():
+        try:
+            while not coordinator.list_requests():
+                time.sleep(0.01)
+            request = coordinator.list_requests()[0]
+            coordinator.take_control(request.intervention_id, "reviewer")
+            coordinator.record_human_action(
+                request.intervention_id,
+                ActionStep("human-fill", ActionType.FILL, Locator("label", "Member ID"), "1001"),
+            )
+            coordinator.resume(request.intervention_id)
+        except Exception as exc:  # surfaced below so this test cannot pass silently
+            operator_errors.append(exc)
+
+    worker = threading.Thread(target=operator)
+    worker.start()
+    result = ReplayRunner(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path / "run"),
+        artifact(),
+        inputs={"member_id": "1001"},
+        handoff=coordinator,
+        handoff_wait_s=2,
+    ).run()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert not operator_errors
+    assert result.status is RunStatus.SUCCESS
+    assert coordinator.list_requests()[0].state is HandoffState.RESUMED

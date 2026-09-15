@@ -5,8 +5,11 @@ from typing import Any
 
 
 _SECRET_PATTERNS = (
-    re.compile(r"(?i)(api[_-]?key|token|password|secret)(\s*[=:]\s*)[^\s,;]+"),
-    re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]+"),
+    re.compile(r"(?i)((?:api[_-]?key|token|password|secret)(?:\s*[=:]\s*)+)[^\s,;]+"),
+    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._-]+"),
+)
+_SENSITIVE_FIELDS = re.compile(
+    r"(?i)^(?:api[_-]?key|authorization|account(?:[_-]?number)?|email|member[_-]?id|name|password|phone|secret|ssn|token)$"
 )
 _PII_PATTERNS = (
     re.compile(r"(?i)\b(?:demo|synthetic)[_-]?(?:member|user)[_-]?\d+\b"),
@@ -22,7 +25,7 @@ def redact_text(value: str) -> str:
 
     result = value
     for pattern in _SECRET_PATTERNS:
-        result = pattern.sub(lambda match: f"{match.group(1)}{match.group(2)}<REDACTED>", result)
+        result = pattern.sub(lambda match: f"{match.group(1)}<REDACTED>", result)
     for pattern in _PII_PATTERNS:
         result = pattern.sub("<REDACTED>", result)
     return result
@@ -31,6 +34,8 @@ def redact_text(value: str) -> str:
 def redact_value(name: str, value: Any) -> Any:
     if value is None:
         return None
+    if _SENSITIVE_FIELDS.match(name):
+        return "<REDACTED>"
     if isinstance(value, str):
         return redact_text(value)
     if isinstance(value, dict):

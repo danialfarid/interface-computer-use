@@ -5,8 +5,9 @@ import re
 from typing import Any, Protocol
 
 from .evidence import EvidenceRecorder
+from .handoff import HandoffCoordinator
 from .models import ActionStep, ActionType, CapabilityArtifact, Locator, RunResult, RunStatus
-from .policy import ConfirmationRequired, GuardrailPolicy, PolicyViolation
+from .policy import ConfirmationRequired, GuardrailPolicy, PolicyViolation, check_action_destination
 from .surface import SurfaceAppError, SurfaceError, SurfaceObservation, SurfaceTimeout, UnexpectedDialog
 
 
@@ -46,6 +47,8 @@ class ReplayRunner:
         inputs: dict[str, Any],
         confirmed_risky: bool = False,
         max_retries: int = 2,
+        handoff: HandoffCoordinator | None = None,
+        handoff_wait_s: float = 300.0,
     ):
         self.surface = surface
         self.policy = policy
@@ -54,6 +57,9 @@ class ReplayRunner:
         self.inputs = inputs
         self.confirmed_risky = confirmed_risky
         self.max_retries = max_retries
+        self.handoff = handoff
+        self.handoff_wait_s = handoff_wait_s
+        self._handoff_used = False
 
     def run(self) -> RunResult:
         self.evidence.event(
@@ -63,6 +69,19 @@ class ReplayRunner:
             artifact_version=self.artifact.artifact_version,
             inputs=self.inputs,
         )
+        try:
+            self.artifact.validate()
+        except ValueError as exc:
+            return self._finish(
+                RunResult(
+                    RunStatus.HARD_FAILURE,
+                    self.evidence.run_id,
+                    failed_step="artifact-validation",
+                    error_code="INVALID_ARTIFACT",
+                    message=str(exc),
+                    evidence_dir=str(self.evidence.directory),
+                )
+            )
         try:
             self._validate_inputs()
         except InputValidationError as exc:
@@ -79,7 +98,13 @@ class ReplayRunner:
 
         outputs: dict[str, Any] = {}
         for step in self.artifact.steps:
-            business = self._business_outcome(self.surface.observe())
+            try:
+                observation = self.surface.observe()
+            except SurfaceError as exc:
+                if self._try_handoff(step, exc):
+                    continue
+                return self._surface_failure(step, exc)
+            business = self._business_outcome(observation)
             if business is not None:
                 return self._finish(
                     RunResult(
@@ -93,23 +118,38 @@ class ReplayRunner:
             try:
                 self._run_step(step, outputs)
             except (PolicyViolation, ConfirmationRequired) as exc:
+                if self._try_handoff(step, exc):
+                    continue
                 return self._failure(step, "POLICY_BLOCKED", str(exc))
             except InputValidationError as exc:
                 return self._failure(step, "INVALID_INPUT", str(exc))
             except UnexpectedDialog as exc:
-                self.evidence.failure_snapshot(self.surface, f"failure-{step.id}")
-                return self._failure(step, "UNEXPECTED_DIALOG", str(exc))
+                if self._try_handoff(step, exc):
+                    continue
+                return self._surface_failure(step, exc)
             except SurfaceAppError as exc:
-                self.evidence.failure_snapshot(self.surface, f"failure-{step.id}")
-                return self._failure(step, "APP_ERROR", str(exc))
+                if self._try_handoff(step, exc):
+                    continue
+                return self._surface_failure(step, exc)
             except SurfaceTimeout as exc:
-                self.evidence.failure_snapshot(self.surface, f"failure-{step.id}")
-                return self._failure(step, "TIMEOUT", str(exc), RunStatus.RECOVERABLE_FAILURE)
+                if self._try_handoff(step, exc):
+                    continue
+                return self._surface_failure(step, exc)
             except SurfaceError as exc:
-                self.evidence.failure_snapshot(self.surface, f"failure-{step.id}")
-                return self._failure(step, "SURFACE_ERROR", str(exc))
+                if self._try_handoff(step, exc):
+                    continue
+                return self._surface_failure(step, exc)
 
-        observation = self.surface.observe()
+        try:
+            observation = self.surface.observe()
+        except SurfaceError as exc:
+            if self._try_handoff(ActionStep("final-observation", ActionType.WAIT), exc):
+                try:
+                    observation = self.surface.observe()
+                except SurfaceError as second_exc:
+                    return self._surface_failure(ActionStep("final-observation", ActionType.WAIT), second_exc)
+            else:
+                return self._surface_failure(ActionStep("final-observation", ActionType.WAIT), exc)
         business = self._business_outcome(observation)
         if business is not None:
             return self._finish(
@@ -157,7 +197,11 @@ class ReplayRunner:
             for attempt in range(self.max_retries + 1):
                 try:
                     extracted = self.surface.extract(step.target, step.timeout_ms)
-                    outputs[step.value] = extracted
+                    outputs[step.value] = _coerce_output(
+                        self.artifact.outputs[step.value].type,
+                        extracted,
+                        step.value,
+                    )
                     self.evidence.event(
                         "extraction", step=step.id, name=step.value, value=extracted, attempt=attempt + 1
                     )
@@ -173,6 +217,7 @@ class ReplayRunner:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
+                check_action_destination(self.policy, self.surface, step)
                 self.surface.perform(step.action, step.target, value, step.timeout_ms)
                 self.policy.check_url(self.surface.url)
                 self.evidence.event("action", step=step.to_dict(), attempt=attempt + 1)
@@ -204,7 +249,7 @@ class ReplayRunner:
             value = self.inputs[name]
             if spec.type == "string" and not isinstance(value, str):
                 raise InputValidationError(f"{name} must be a string")
-            if spec.type == "integer" and not isinstance(value, int):
+            if spec.type == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
                 raise InputValidationError(f"{name} must be an integer")
 
     def _checkpoint_matches(self, observation: SurfaceObservation) -> bool:
@@ -239,9 +284,54 @@ class ReplayRunner:
             )
         )
 
+    def _surface_failure(self, step: ActionStep, exc: SurfaceError) -> RunResult:
+        self.evidence.failure_snapshot(self.surface, f"failure-{step.id}")
+        if isinstance(exc, UnexpectedDialog):
+            code = "UNEXPECTED_DIALOG"
+        elif isinstance(exc, SurfaceAppError):
+            code = "APP_ERROR"
+        elif isinstance(exc, SurfaceTimeout):
+            code = "TIMEOUT"
+        else:
+            code = "SURFACE_ERROR"
+        status = RunStatus.RECOVERABLE_FAILURE if isinstance(exc, SurfaceTimeout) else RunStatus.HARD_FAILURE
+        return self._failure(step, code, str(exc), status)
+
+    def _try_handoff(self, step: ActionStep, reason: Exception) -> bool:
+        if self.handoff is None or self._handoff_used:
+            return False
+        try:
+            observation = self.surface.observe()
+        except SurfaceError:
+            observation = SurfaceObservation(self.surface.url, "", "", ())
+        request = self.handoff.create_request(
+            goal=f"replay capability {self.artifact.name}",
+            capability_id=self.artifact.capability_id,
+            step=step.id,
+            reason=str(reason),
+            observation=observation,
+        )
+        self.evidence.event("run_paused", intervention_id=request.intervention_id)
+        if not self.handoff.wait_for_resume(request.intervention_id, self.handoff_wait_s):
+            return False
+        self.evidence.event("run_resumed", intervention_id=request.intervention_id)
+        self._handoff_used = True
+        return True
+
     def _finish(self, result: RunResult) -> RunResult:
         self.evidence.event("run_finished", result=result.to_dict())
         return result
+
+
+def _coerce_output(output_type: str, value: str, name: str) -> Any:
+    if output_type == "string":
+        return value
+    if output_type == "integer":
+        try:
+            return int(value.strip())
+        except (AttributeError, ValueError) as exc:
+            raise SurfaceError(f"output {name} is not a valid integer: {value!r}") from exc
+    raise SurfaceError(f"unsupported output type for {name}: {output_type}")
 
 
 _PARAMETER = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")

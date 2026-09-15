@@ -7,6 +7,9 @@ import json
 from typing import Any, Mapping
 
 
+SUPPORTED_SCHEMA_VERSION = "1.0"
+
+
 class ActionType(StrEnum):
     NAVIGATE = "navigate"
     CLICK = "click"
@@ -160,7 +163,7 @@ class CapabilityArtifact:
     steps: tuple[ActionStep, ...]
     checkpoint: Checkpoint
     business_outcomes: tuple[BusinessOutcome, ...] = ()
-    schema_version: str = "1.0"
+    schema_version: str = SUPPORTED_SCHEMA_VERSION
     artifact_version: int = 1
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -184,6 +187,32 @@ class CapabilityArtifact:
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
 
+    def validate(self) -> None:
+        if self.schema_version != SUPPORTED_SCHEMA_VERSION:
+            raise ValueError(f"unsupported capability schema version: {self.schema_version}")
+        if self.artifact_version < 1:
+            raise ValueError("artifact_version must be at least 1")
+        if not self.capability_id or not self.name:
+            raise ValueError("capability_id and name are required")
+        if not self.target.get("url") or not self.target.get("origin"):
+            raise ValueError("target must include url and origin")
+        for name, spec in self.parameters.items():
+            if spec.type not in {"string", "integer"}:
+                raise ValueError(f"unsupported parameter type for {name}: {spec.type}")
+        for name, spec in self.outputs.items():
+            if spec.type not in {"string", "integer"}:
+                raise ValueError(f"unsupported output type for {name}: {spec.type}")
+        if not self.steps:
+            raise ValueError("a capability must contain at least one step")
+        for step in self.steps:
+            if not step.id or step.timeout_ms < 1:
+                raise ValueError(f"step {step.id!r} must have a positive timeout")
+            if step.action is ActionType.EXTRACT:
+                if step.target is None or step.value not in self.outputs:
+                    raise ValueError(f"extract step {step.id} must name a declared output")
+                if self.outputs[step.value].source != step.target:
+                    raise ValueError(f"extract step {step.id} does not match its output source")
+
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "CapabilityArtifact":
         parameters = {
@@ -205,7 +234,7 @@ class CapabilityArtifact:
             value=str(checkpoint_value["value"]),
             description=str(checkpoint_value["description"]),
         )
-        return cls(
+        artifact = cls(
             schema_version=str(value.get("schema_version", "1.0")),
             artifact_version=int(value.get("artifact_version", 1)),
             capability_id=str(value["capability_id"]),
@@ -227,6 +256,8 @@ class CapabilityArtifact:
             ),
             created_at=str(value.get("created_at", "")),
         )
+        artifact.validate()
+        return artifact
 
 
 class RunStatus(StrEnum):

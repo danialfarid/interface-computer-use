@@ -86,7 +86,13 @@ class HandoffCoordinator:
         reason: str,
         observation: SurfaceObservation,
     ) -> InterventionRequest:
-        screenshot, snapshot = self.surface.capture(self.evidence.directory, f"intervention-{uuid.uuid4().hex[:8]}")
+        try:
+            screenshot, snapshot = self.surface.capture(
+                self.evidence.directory, f"intervention-{uuid.uuid4().hex[:8]}"
+            )
+        except Exception as exc:
+            self.evidence.event("intervention_snapshot_unavailable", error=str(exc))
+            screenshot, snapshot = None, None
         request = InterventionRequest(
             intervention_id=uuid.uuid4().hex,
             run_id=self.evidence.run_id,
@@ -98,7 +104,7 @@ class HandoffCoordinator:
             current_url=observation.url,
             observation=observation.to_dict(),
             screenshot=str(screenshot) if screenshot is not None else None,
-            snapshot=str(snapshot),
+            snapshot=str(snapshot) if snapshot is not None else None,
         )
         with self._condition:
             self._requests[request.intervention_id] = request

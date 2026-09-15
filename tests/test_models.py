@@ -1,4 +1,5 @@
 import json
+import pytest
 
 from cua.models import (
     ActionStep,
@@ -18,7 +19,7 @@ def test_capability_round_trips_without_runtime_values():
         name="Read member balance",
         description="Find a member and read the displayed balance.",
         surface_kind="browser",
-        target={"origin": "http://127.0.0.1:8765", "route": "/"},
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
         parameters={"member_id": ParameterSpec("string", "Member identifier")},
         outputs={
             "balance": OutputSpec(
@@ -48,3 +49,41 @@ def test_capability_round_trips_without_runtime_values():
     assert loaded == artifact
     assert "member_id" in loaded.to_json()
     assert "12345" not in loaded.to_json()
+
+
+def test_capability_rejects_unknown_schema_version():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={},
+        outputs={},
+        steps=(ActionStep("wait", ActionType.WAIT),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+    payload = json.loads(artifact.to_json())
+    payload["schema_version"] = "99.0"
+
+    with pytest.raises(ValueError, match="unsupported capability schema version"):
+        CapabilityArtifact.from_dict(payload)
+
+
+def test_capability_requires_extract_step_to_match_declared_output_source():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={},
+        outputs={"value": OutputSpec("integer", "Value", Locator("css", "#one"))},
+        steps=(
+            ActionStep("extract", ActionType.EXTRACT, Locator("css", "#two"), "value"),
+        ),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+
+    with pytest.raises(ValueError, match="does not match its output source"):
+        artifact.validate()
