@@ -209,16 +209,20 @@ class BrowserSurface:
             )
         raise SurfaceError(f"control has no stable locator: {info}")
 
-    def resolve(self, locator: Locator) -> Any:
+    def resolve(self, locator: Locator, timeout_ms: int = 5_000) -> Any:
         errors: list[str] = []
+        timed_out = False
         for candidate in (locator, *locator.fallback):
             try:
                 handle = self._resolve_one(candidate)
-                if handle.count() > 0:
-                    return handle
-                errors.append(f"{candidate.strategy}:{candidate.value} matched 0 elements")
+                handle.first.wait_for(state="attached", timeout=timeout_ms)
+                return handle
             except Exception as exc:
+                if "Timeout" in type(exc).__name__:
+                    timed_out = True
                 errors.append(f"{candidate.strategy}:{candidate.value}: {exc}")
+        if timed_out:
+            raise SurfaceTimeout(f"could not resolve locator before timeout: {'; '.join(errors)}")
         raise SurfaceError(f"could not resolve locator {locator}: {'; '.join(errors)}")
 
     def _resolve_one(self, locator: Locator) -> Any:
@@ -245,16 +249,16 @@ class BrowserSurface:
             elif action is ActionType.CLICK:
                 if locator is None:
                     raise SurfaceError("click requires a locator")
-                self.resolve(locator).click(timeout=timeout_ms)
+                self.resolve(locator, timeout_ms).click(timeout=timeout_ms)
                 self.page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
             elif action is ActionType.FILL:
                 if locator is None or value is None:
                     raise SurfaceError("fill requires a locator and value")
-                self.resolve(locator).fill(value, timeout=timeout_ms)
+                self.resolve(locator, timeout_ms).fill(value, timeout=timeout_ms)
             elif action is ActionType.PRESS:
                 if locator is None or value is None:
                     raise SurfaceError("press requires a locator and key")
-                self.resolve(locator).press(value, timeout=timeout_ms)
+                self.resolve(locator, timeout_ms).press(value, timeout=timeout_ms)
             elif action is ActionType.WAIT:
                 self.page.wait_for_timeout(int(value or "250"))
             else:
@@ -268,7 +272,7 @@ class BrowserSurface:
 
     def extract(self, locator: Locator, timeout_ms: int = 5_000) -> str:
         try:
-            return str(self.resolve(locator).inner_text(timeout=timeout_ms)).strip()
+            return str(self.resolve(locator, timeout_ms).inner_text(timeout=timeout_ms)).strip()
         except Exception as exc:
             if "Timeout" in type(exc).__name__:
                 raise SurfaceTimeout(f"extract timed out: {exc}") from exc

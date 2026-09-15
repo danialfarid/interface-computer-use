@@ -1,4 +1,5 @@
 from pathlib import Path
+from dataclasses import replace
 
 from cua.evidence import EvidenceRecorder
 from cua.models import (
@@ -15,7 +16,7 @@ from cua.models import (
 )
 from cua.policy import GuardrailPolicy
 from cua.replay import ReplayRunner
-from cua.surface import SurfaceObservation
+from cua.surface import SurfaceError, SurfaceObservation
 
 
 class FakeReplaySurface:
@@ -117,3 +118,39 @@ def test_replay_rejects_missing_input_before_touching_surface(tmp_path):
     assert result.status is RunStatus.HARD_FAILURE
     assert result.error_code == "INVALID_INPUT"
     assert surface.seen_values == []
+
+
+def test_replay_rejects_success_when_declared_output_was_not_extracted(tmp_path):
+    saved = artifact()
+    incomplete = replace(saved, steps=saved.steps[:2])
+    result = ReplayRunner(
+        FakeReplaySurface(),
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+        incomplete,
+        inputs={"member_id": "1001"},
+    ).run()
+
+    assert result.status is RunStatus.HARD_FAILURE
+    assert result.error_code == "OUTPUTS_MISSING"
+
+
+def test_snapshot_failure_does_not_mask_structured_surface_failure(tmp_path):
+    class BrokenCaptureSurface(FakeReplaySurface):
+        def perform(self, action, locator=None, value=None, timeout_ms=5000):
+            raise SurfaceError("element detached")
+
+        def capture(self, directory: Path, stem: str):
+            raise SurfaceError("page closed")
+
+    result = ReplayRunner(
+        BrokenCaptureSurface(),
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+        artifact(),
+        inputs={"member_id": "1001"},
+    ).run()
+
+    assert result.status is RunStatus.HARD_FAILURE
+    assert result.error_code == "SURFACE_ERROR"
+    assert result.failed_step == "fill"

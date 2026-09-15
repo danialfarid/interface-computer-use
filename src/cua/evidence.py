@@ -34,20 +34,25 @@ class EvidenceRecorder:
         return path
 
     def artifact_file(self, artifact: Any) -> Path:
-        """Persist a validated artifact; runtime values never belong in one."""
+        """Persist an artifact after the caller has built its typed contract."""
 
         path = self.directory / "artifact.json"
         path.write_text(artifact.to_json(), encoding="utf-8")
         return path
 
     def failure_snapshot(self, surface: Any, label: str) -> dict[str, str]:
-        screenshot, snapshot = surface.capture(self.directory, label)
-        self.event(
-            "failure_snapshot",
-            screenshot=str(screenshot.name) if screenshot is not None else None,
-            snapshot=str(snapshot.name),
-        )
+        try:
+            screenshot, snapshot = surface.capture(self.directory, label)
+            self.event(
+                "failure_snapshot",
+                screenshot=str(screenshot.name) if screenshot is not None else None,
+                snapshot=str(snapshot.name),
+            )
+        except Exception as exc:
+            self.event("failure_snapshot_unavailable", error=str(exc))
+            screenshot = None
+            snapshot = None
         return {
             "screenshot": str(screenshot) if screenshot is not None else "",
-            "snapshot": str(snapshot),
+            "snapshot": str(snapshot) if snapshot is not None else "",
         }

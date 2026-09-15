@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
-import uuid
+from typing import Protocol
 
 from .evidence import EvidenceRecorder
 from .handoff import HandoffCoordinator
@@ -211,21 +210,22 @@ class DiscoveryRunner:
             if locator.strategy == "text" and any(char.isdigit() for char in locator.value):
                 raise SurfaceError("refusing to persist a dynamic value as an output locator")
             output_name = self._declared_output_name(action.output_name)
+            extract_step = ActionStep(
+                f"step-{step_number}-{action_number}",
+                ActionType.EXTRACT,
+                locator,
+                output_name,
+                risk=action.risk,
+                description=_safe_description(action.reason, self.parameter_values),
+            )
+            self.policy.check_step(extract_step, confirmed=self.confirmed_risky)
             self.output_sources[output_name] = locator
             value = self.surface.extract(locator)
             self.evidence.event("extraction", name=output_name, value=value)
-            self.recorded_steps.append(
-                ActionStep(
-                    f"step-{step_number}-{action_number}",
-                    ActionType.EXTRACT,
-                    locator,
-                    output_name,
-                    description=_safe_description(action.reason, self.parameter_values),
-                )
-            )
+            self.recorded_steps.append(extract_step)
             return
 
-        value = _parameterize(action.value, self.parameter_values)
+        value = _parameterize_text(action.value, self.parameter_values) if action.value is not None else None
         if action.action is ActionType.NAVIGATE:
             if value is None:
                 raise SurfaceError("navigate requires a value")
@@ -296,15 +296,6 @@ class DiscoveryRunner:
         )
         self.evidence.event("run_finished", result=result.to_dict())
         return result, None
-
-
-def _parameterize(value: str | None, parameter_values: dict[str, str]) -> str | None:
-    if value is None:
-        return None
-    for name, actual in parameter_values.items():
-        if value == actual:
-            return "{{" + name + "}}"
-    return value
 
 
 def _safe_description(value: str, parameter_values: dict[str, str]) -> str:

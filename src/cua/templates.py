@@ -21,7 +21,7 @@ def member_balance_template(target_url: str) -> DiscoveryTemplate:
             )
         },
         output_descriptions={
-            "balance": ("string", "Current savings balance displayed by the portal.", True),
+            "current_savings_balance": ("string", "Current savings balance displayed by the portal.", True),
         },
         checkpoint=Checkpoint(
             CheckpointKind.TEXT_PRESENT,

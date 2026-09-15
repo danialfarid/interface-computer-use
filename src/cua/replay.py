@@ -115,6 +115,14 @@ class ReplayRunner:
                     evidence_dir=str(self.evidence.directory),
                 )
             )
+        missing_outputs = sorted(set(self.artifact.outputs) - set(outputs))
+        if missing_outputs:
+            self.evidence.failure_snapshot(self.surface, "failure-outputs")
+            return self._failure(
+                ActionStep("outputs", ActionType.WAIT),
+                "OUTPUTS_MISSING",
+                "replay did not produce declared output(s): " + ", ".join(missing_outputs),
+            )
         if not self._checkpoint_matches(observation):
             self.evidence.failure_snapshot(self.surface, "failure-checkpoint")
             return self._failure(
