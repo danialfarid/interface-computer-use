@@ -6,6 +6,7 @@ from typing import Any, Protocol
 import uuid
 
 from .evidence import EvidenceRecorder
+from .handoff import HandoffCoordinator
 from .llm import AgentAction, DecisionClient, LLMError
 from .models import (
     ActionStep,
@@ -40,7 +41,7 @@ class DiscoverySurface(Protocol):
 
     def extract(self, locator: Locator, timeout_ms: int = 5_000) -> str: ...
 
-    def capture(self, directory: Path, stem: str) -> tuple[Path, Path]: ...
+    def capture(self, directory: Path, stem: str) -> tuple[Path | None, Path]: ...
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,8 @@ class DiscoveryRunner:
         parameter_values: dict[str, str],
         max_steps: int = 12,
         confirmed_risky: bool = False,
+        handoff: HandoffCoordinator | None = None,
+        handoff_wait_s: float = 300.0,
     ):
         self.surface = surface
         self.client = client
@@ -76,6 +79,8 @@ class DiscoveryRunner:
         self.parameter_values = parameter_values
         self.max_steps = max_steps
         self.confirmed_risky = confirmed_risky
+        self.handoff = handoff
+        self.handoff_wait_s = handoff_wait_s
         self.recorded_steps: list[ActionStep] = []
         self.output_sources: dict[str, Locator] = {}
 
@@ -91,57 +96,85 @@ class DiscoveryRunner:
         except (PolicyViolation, ConfirmationRequired, SurfaceError) as exc:
             return self._failure(RunStatus.HARD_FAILURE, "navigate", "START_FAILED", str(exc))
 
-        for step_number in range(1, self.max_steps + 1):
-            observation = self.surface.observe()
-            self.evidence.event("observation", step=step_number, observation=observation.to_dict())
-            business = self._business_outcome(observation)
-            if business is not None:
-                result = RunResult(
-                    status=RunStatus.BUSINESS_OUTCOME,
-                    run_id=self.evidence.run_id,
-                    outcome_code=business.code,
-                    message=business.description,
-                    evidence_dir=str(self.evidence.directory),
-                )
-                self.evidence.event("run_finished", result=result.to_dict())
-                return result, None
-            try:
-                decision = self.client.decide(goal, observation)
-                self.evidence.event("decision", step=step_number, decision=decision.to_dict())
-            except LLMError as exc:
-                return self._failure(RunStatus.HARD_FAILURE, f"decision-{step_number}", "LLM_ERROR", str(exc))
-
-            try:
-                for action_number, action in enumerate(decision.actions, start=1):
-                    self._execute_action(step_number, action_number, action, observation)
-            except (PolicyViolation, ConfirmationRequired) as exc:
-                return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "POLICY_BLOCKED", str(exc))
-            except SurfaceError as exc:
-                self.evidence.failure_snapshot(self.surface, f"failure-step-{step_number}")
-                return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "SURFACE_ERROR", str(exc))
-
-            if decision.done:
-                current = self.surface.observe()
-                if self._checkpoint_matches(current):
-                    artifact = self._artifact()
-                    self.evidence.json_file("artifact.json", artifact.to_dict())
+        step_number = 0
+        handoff_used = False
+        while True:
+            while step_number < self.max_steps:
+                step_number += 1
+                observation = self.surface.observe()
+                self.evidence.event("observation", step=step_number, observation=observation.to_dict())
+                business = self._business_outcome(observation)
+                if business is not None:
                     result = RunResult(
-                        status=RunStatus.SUCCESS,
+                        status=RunStatus.BUSINESS_OUTCOME,
                         run_id=self.evidence.run_id,
-                        outputs={"declared": sorted(self.output_sources)},
+                        outcome_code=business.code,
+                        message=business.description,
                         evidence_dir=str(self.evidence.directory),
                     )
                     self.evidence.event("run_finished", result=result.to_dict())
-                    return result, artifact
-                return self._failure(
-                    RunStatus.HARD_FAILURE,
-                    f"decision-{step_number}",
-                    "CHECKPOINT_NOT_MET",
-                    self.template.checkpoint.description,
-                )
+                    return result, None
+                try:
+                    decision = self.client.decide(goal, observation)
+                    self.evidence.event("decision", step=step_number, decision=decision.to_dict())
+                    for action_number, action in enumerate(decision.actions, start=1):
+                        self._execute_action(step_number, action_number, action, observation)
+                except LLMError as exc:
+                    return self._failure(RunStatus.HARD_FAILURE, f"decision-{step_number}", "LLM_ERROR", str(exc))
+                except (PolicyViolation, ConfirmationRequired) as exc:
+                    return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "POLICY_BLOCKED", str(exc))
+                except SurfaceError as exc:
+                    self.evidence.failure_snapshot(self.surface, f"failure-step-{step_number}")
+                    return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "SURFACE_ERROR", str(exc))
 
-        self.evidence.failure_snapshot(self.surface, "failure-max-steps")
-        return self._failure(RunStatus.ESCALATED, "max-steps", "MAX_STEPS", "discovery did not reach the goal")
+                if decision.done:
+                    current = self.surface.observe()
+                    if self._checkpoint_matches(current):
+                        artifact = self._artifact()
+                        self.evidence.json_file("artifact.json", artifact.to_dict())
+                        result = RunResult(
+                            status=RunStatus.SUCCESS,
+                            run_id=self.evidence.run_id,
+                            outputs={"declared": sorted(self.output_sources)},
+                            evidence_dir=str(self.evidence.directory),
+                        )
+                        self.evidence.event("run_finished", result=result.to_dict())
+                        return result, artifact
+                    return self._failure(
+                        RunStatus.HARD_FAILURE,
+                        f"decision-{step_number}",
+                        "CHECKPOINT_NOT_MET",
+                        self.template.checkpoint.description,
+                    )
+
+            observation = self.surface.observe()
+            if self.handoff is None or handoff_used:
+                self.evidence.failure_snapshot(self.surface, "failure-max-steps")
+                return self._failure(
+                    RunStatus.ESCALATED,
+                    "max-steps",
+                    "MAX_STEPS",
+                    "discovery did not reach the goal",
+                )
+            request = self.handoff.create_request(
+                goal=goal,
+                capability_id=self.template.capability_id,
+                step="max-steps",
+                reason="discovery reached its step budget without a safe completion",
+                observation=observation,
+            )
+            self.evidence.event("run_paused", intervention_id=request.intervention_id)
+            if not self.handoff.wait_for_resume(request.intervention_id, self.handoff_wait_s):
+                self.evidence.failure_snapshot(self.surface, "failure-handoff-timeout")
+                return self._failure(
+                    RunStatus.ESCALATED,
+                    "handoff",
+                    "HANDOFF_TIMEOUT",
+                    "human intervention was not completed before the wait expired",
+                )
+            self.evidence.event("run_resumed", intervention_id=request.intervention_id)
+            handoff_used = True
+            step_number = 0
 
     def _execute_action(
         self,

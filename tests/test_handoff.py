@@ -1,0 +1,90 @@
+from pathlib import Path
+from urllib.request import Request, urlopen
+import json
+
+from cua.evidence import EvidenceRecorder
+from cua.handoff import HandoffCoordinator, HandoffServer, HandoffState
+from cua.models import ActionStep, ActionType, Checkpoint, CheckpointKind, Locator
+from cua.policy import GuardrailPolicy
+from cua.surface import SurfaceObservation
+
+
+class FakeSurface:
+    kind = "fake"
+    url = "http://127.0.0.1:8765/"
+
+    def __init__(self):
+        self.actions = []
+
+    def observe(self):
+        return SurfaceObservation(self.url, "Lookup", "Lookup", ())
+
+    def perform(self, action, locator=None, value=None, timeout_ms=5000):
+        self.actions.append((action, locator, value))
+
+    def capture(self, directory: Path, stem: str):
+        screenshot = directory / f"{stem}.png"
+        snapshot = directory / f"{stem}.txt"
+        screenshot.write_bytes(b"fake")
+        snapshot.write_text("safe", encoding="utf-8")
+        return screenshot, snapshot
+
+
+def test_human_action_uses_same_surface_and_returns_control(tmp_path):
+    surface = FakeSurface()
+    coordinator = HandoffCoordinator(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+    )
+    request = coordinator.create_request(
+        goal="look up a member",
+        capability_id="member-balance-v1",
+        step="step-4",
+        reason="model could not identify the next control",
+        observation=surface.observe(),
+    )
+    coordinator.take_control(request.intervention_id, "reviewer")
+    coordinator.record_human_action(
+        request.intervention_id,
+        ActionStep("human-1", ActionType.CLICK, Locator("role", "button:Search")),
+    )
+    coordinator.resume(request.intervention_id)
+
+    assert surface.actions[0][0] is ActionType.CLICK
+    assert coordinator.get(request.intervention_id).state == HandoffState.RESUMED
+    assert coordinator.get(request.intervention_id).human_actions[0]["id"] == "human-1"
+
+
+def test_local_operator_api_transfers_and_resumes(tmp_path):
+    surface = FakeSurface()
+    coordinator = HandoffCoordinator(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+    )
+    request = coordinator.create_request(
+        goal="goal", capability_id="cap", step="step", reason="stuck", observation=surface.observe()
+    )
+    server = HandoffServer(coordinator)
+    server.start()
+    try:
+        with urlopen(server.url + "/interventions") as response:
+            listing = json.loads(response.read())
+        assert listing["interventions"][0]["state"] == HandoffState.REQUESTED
+
+        def post(path, payload):
+            request = Request(
+                server.url + path,
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request) as response:
+                return json.loads(response.read())
+
+        post(f"/interventions/{request.intervention_id}/take-control", {"operator": "reviewer"})
+        result = post(f"/interventions/{request.intervention_id}/resume", {})
+        assert result["state"] == HandoffState.RESUMED
+    finally:
+        server.close()

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
 from typing import Any
 
 from .models import ActionType, Locator
+from .redaction import redact_text
 
 
 class SurfaceError(RuntimeError):
@@ -271,12 +273,15 @@ class BrowserSurface:
         except Exception as exc:
             raise SurfaceError(f"extract failed for {locator}: {exc}") from exc
 
-    def capture(self, directory: Path, stem: str) -> tuple[Path, Path]:
+    def capture(self, directory: Path, stem: str) -> tuple[Path | None, Path]:
         directory.mkdir(parents=True, exist_ok=True)
-        screenshot = directory / f"{stem}.png"
+        screenshot = directory / f"{stem}.png" if os.environ.get("CUA_PERSIST_SCREENSHOTS") == "1" else None
         snapshot = directory / f"{stem}.txt"
-        self.page.screenshot(path=str(screenshot), full_page=True)
-        snapshot.write_text(self.observe().text, encoding="utf-8")
+        if screenshot is not None:
+            # Opt-in only: screenshots can contain regulated data. The default
+            # evidence signal is the redacted DOM/accessibility text snapshot.
+            self.page.screenshot(path=str(screenshot), full_page=True)
+        snapshot.write_text(redact_text(self.observe().text), encoding="utf-8")
         return screenshot, snapshot
 
 

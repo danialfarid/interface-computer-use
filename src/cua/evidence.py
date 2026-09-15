@@ -37,7 +37,10 @@ class EvidenceRecorder:
         screenshot, snapshot = surface.capture(self.directory, label)
         self.event(
             "failure_snapshot",
-            screenshot=str(screenshot.name),
+            screenshot=str(screenshot.name) if screenshot is not None else None,
             snapshot=str(snapshot.name),
         )
-        return {"screenshot": str(screenshot), "snapshot": str(snapshot)}
+        return {
+            "screenshot": str(screenshot) if screenshot is not None else "",
+            "snapshot": str(snapshot),
+        }

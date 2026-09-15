@@ -10,6 +10,7 @@ _SECRET_PATTERNS = (
 )
 _PII_PATTERNS = (
     re.compile(r"\b\d{4,}\b"),
+    re.compile(r"\$\s?[\d,]+(?:\.\d{2})?"),
     re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"),
     re.compile(r"\b(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b"),
 )
