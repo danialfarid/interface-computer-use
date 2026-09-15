@@ -275,7 +275,7 @@ class HandoffCoordinator:
         pending: list[_PendingHumanAction] = []
         with self._condition:
             request = self._requests[intervention_id]
-            if request.state != HandoffState.HUMAN_CONTROL:
+            if request.state not in {HandoffState.REQUESTED, HandoffState.HUMAN_CONTROL}:
                 return
             request.state = HandoffState.CLOSED
             operator = request.operator

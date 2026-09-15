@@ -16,16 +16,16 @@ _SENSITIVE_FIELDS = re.compile(
 _PII_PATTERNS = (
     re.compile(r"(?i)\b(?:demo|synthetic)[_-]?(?:member|user)[_-]?\d+\b"),
     re.compile(r"\b\d{4,}\b"),
-    re.compile(r"\b\d+\b"),
     re.compile(r"\$\s?[\d,]+(?:\.\d{2})?"),
     re.compile(r"\b\d[\d,]*\.\d{2}\b"),
+    re.compile(r"(?<![\w.,$-])\d+(?![\w.,-])"),
     re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"),
     re.compile(r"\b(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b"),
     re.compile(r"(?i)\b\d{1,5}\s+[A-Za-z]{2,}(?:\s+[A-Za-z]{2,}){1,2}\b"),
     re.compile(r"\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b"),
     re.compile(r"\b\d{1,5}\s+[A-Z]{2,}(?:\s+[A-Z]{2,}){1,2}\b"),
     re.compile(r"\b[A-Z]{2,}(?:\s+[A-Z]{2,})+\b"),
-    re.compile(r"(?im)\b(?:member\s+)?(?:name|address)\s*(?:[:\t])\s*[^\r\n]+"),
+    re.compile(r"(?im)\b(?:member\s+)?(?:name|address)\s*(?:[:\t]|\r?\n)\s*[^\r\n]+"),
 )
 
 

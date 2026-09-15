@@ -119,10 +119,16 @@ class DiscoveryRunner:
                     observation = self.surface.observe()
                 except PolicyViolation as exc:
                     if self._try_handoff(goal, f"observation-{step_number}", str(exc), None):
+                        completed = self._complete_after_handoff(f"observation-{step_number}")
+                        if completed is not None:
+                            return completed
                         continue
                     return self._failure(RunStatus.HARD_FAILURE, f"observation-{step_number}", "POLICY_BLOCKED", str(exc))
                 except (UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError) as exc:
                     if self._try_handoff(goal, f"observation-{step_number}", str(exc), None):
+                        completed = self._complete_after_handoff(f"observation-{step_number}")
+                        if completed is not None:
+                            return completed
                         continue
                     return self._surface_failure(f"observation-{step_number}", exc)
                 self.evidence.event("observation", step=step_number, observation=observation.to_dict())
@@ -144,22 +150,37 @@ class DiscoveryRunner:
                         self._execute_action(step_number, action_number, action, observation)
                 except LLMError as exc:
                     if self._try_handoff(goal, f"decision-{step_number}", str(exc), observation):
+                        completed = self._complete_after_handoff(f"decision-{step_number}")
+                        if completed is not None:
+                            return completed
                         continue
                     return self._failure(RunStatus.HARD_FAILURE, f"decision-{step_number}", "LLM_ERROR", str(exc))
                 except (PolicyViolation, ConfirmationRequired) as exc:
                     if self._try_handoff(goal, f"step-{step_number}", str(exc), observation):
+                        completed = self._complete_after_handoff(f"step-{step_number}")
+                        if completed is not None:
+                            return completed
                         continue
                     return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "POLICY_BLOCKED", str(exc))
                 except UnexpectedDialog as exc:
                     if self._try_handoff(goal, f"step-{step_number}", str(exc), observation):
+                        completed = self._complete_after_handoff(f"step-{step_number}")
+                        if completed is not None:
+                            return completed
                         continue
                     return self._surface_failure(f"step-{step_number}", exc)
                 except SurfaceAppError as exc:
                     if self._try_handoff(goal, f"step-{step_number}", str(exc), observation):
+                        completed = self._complete_after_handoff(f"step-{step_number}")
+                        if completed is not None:
+                            return completed
                         continue
                     return self._surface_failure(f"step-{step_number}", exc)
                 except SurfaceError as exc:
                     if self._try_handoff(goal, f"step-{step_number}", str(exc), observation):
+                        completed = self._complete_after_handoff(f"step-{step_number}")
+                        if completed is not None:
+                            return completed
                         continue
                     return self._surface_failure(f"step-{step_number}", exc)
 
@@ -493,6 +514,33 @@ class DiscoveryRunner:
         self.evidence.event("run_resumed", intervention_id=request.intervention_id)
         self._handoff_used = True
         return True
+
+    def _complete_after_handoff(
+        self, step: str
+    ) -> tuple[RunResult, CapabilityArtifact | None] | None:
+        try:
+            observation = self.surface.observe()
+        except (PolicyViolation, UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError):
+            return None
+        if not self._checkpoint_matches(observation):
+            return None
+        missing_outputs = sorted(set(self.template.output_descriptions) - set(self.output_sources))
+        if missing_outputs:
+            return None
+        try:
+            artifact = self._artifact()
+            artifact.validate()
+            self.evidence.artifact_file(artifact)
+        except ValueError as exc:
+            return self._failure(RunStatus.HARD_FAILURE, step, "INVALID_ARTIFACT", str(exc))
+        result = RunResult(
+            status=RunStatus.SUCCESS,
+            run_id=self.evidence.run_id,
+            outputs={"declared": sorted(self.output_sources)},
+            evidence_dir=str(self.evidence.directory),
+        )
+        self.evidence.event("run_finished", result=result.to_dict())
+        return result, artifact
 
     def _failure(self, status: RunStatus, step: str, code: str, message: str) -> tuple[RunResult, None]:
         result = RunResult(

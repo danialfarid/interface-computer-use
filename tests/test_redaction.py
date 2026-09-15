@@ -19,6 +19,7 @@ def test_redaction_handles_bearer_and_key_formats_without_crashing():
     assert "synthetic_password" not in redacted
     assert "JANE EXAMPLE" not in redact_text("Member name\tJANE EXAMPLE")
     assert "jane example" not in redact_text("Member name\tjane example")
+    assert "jane example" not in redact_text("Member name\njane example")
     assert "<REDACTED>" in redacted
 
 
@@ -42,6 +43,22 @@ def test_evidence_redacts_sensitive_observation_payloads(tmp_path):
 
     record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
     assert "85" not in json.dumps(record["payload"])
+
+
+def test_evidence_redacts_readable_target_text_without_capitalization(tmp_path):
+    evidence = EvidenceRecorder(tmp_path)
+    evidence.event(
+        "observation",
+        observation={
+            "readable_targets": [
+                {"text": "jane example", "locator": {"strategy": "text", "value": "jane example"}}
+            ]
+        },
+    )
+
+    record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
+    payload = json.dumps(record["payload"])
+    assert "jane example" not in payload
 
 
 def test_redaction_masks_named_sensitive_scalar_values_including_numbers():

@@ -33,6 +33,25 @@ def _redact_sensitive_values(value: Any, sensitive_values: set[str]) -> Any:
     return value
 
 
+def _redact_readable_targets(value: Any) -> Any:
+    if isinstance(value, dict):
+        result = {str(key): _redact_readable_targets(item) for key, item in value.items()}
+        targets = result.get("readable_targets")
+        if isinstance(targets, list):
+            for target in targets:
+                if not isinstance(target, dict):
+                    continue
+                if "text" in target:
+                    target["text"] = "<REDACTED>"
+                locator = target.get("locator")
+                if isinstance(locator, dict) and locator.get("strategy") == "text":
+                    locator["value"] = "<REDACTED>"
+        return result
+    if isinstance(value, list):
+        return [_redact_readable_targets(item) for item in value]
+    return value
+
+
 class EvidenceRecorder:
     """Append-only run evidence with redaction at the persistence boundary."""
 
@@ -50,10 +69,7 @@ class EvidenceRecorder:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "run_id": self.run_id,
             "kind": kind,
-            "payload": _redact_sensitive_values(
-                _redact_sensitive_names(redact_value(kind, payload), self.sensitive_names),
-                self.sensitive_values,
-            ),
+            "payload": self.redact_payload(payload),
         }
         redacted_step = record["payload"].get("step")
         raw_step = payload.get("step")
@@ -70,10 +86,10 @@ class EvidenceRecorder:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
 
     def redact_payload(self, payload: Any) -> Any:
-        return _redact_sensitive_values(
+        return _redact_readable_targets(_redact_sensitive_values(
             _redact_sensitive_names(redact_value("payload", payload), self.sensitive_names),
             self.sensitive_values,
-        )
+        ))
 
     def redact_url(self, value: str) -> str:
         return _redact_sensitive_values(redact_url(value), self.sensitive_values)

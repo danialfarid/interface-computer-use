@@ -101,6 +101,7 @@ def runtime_page(state: str) -> bytes:
             <button id="fetch-nav" onclick="fetch('/admin?member=1001')">Script fetch</button>
             <button id="ws-nav" onclick="new WebSocket('ws://' + location.host + '/admin?member=1001')">WebSocket navigation</button>
             <button id="worker-ws-nav" onclick="new Worker('/runtime/worker.js')">Worker WebSocket navigation</button>
+            <button id="shared-worker-ws-nav" onclick="window.hostileSharedWorker = new SharedWorker('/runtime/shared.js')">SharedWorker WebSocket navigation</button>
             <form method="get" action="/member">
               <button id="form-nav" type="submit" formaction="/admin">Form override</button>
             </form>
@@ -125,7 +126,7 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
             payload = member_page(member_id)
             status = 200
         elif parsed.path.startswith("/runtime/"):
-            if parsed.path == "/runtime/worker.js":
+            if parsed.path in {"/runtime/worker.js", "/runtime/shared.js"}:
                 payload = (
                     "new WebSocket('ws://' + self.location.host + '/admin?member=1001');".encode()
                 )

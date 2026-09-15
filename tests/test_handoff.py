@@ -194,6 +194,23 @@ def test_expired_handoff_closes_control_and_rejects_late_actions(tmp_path):
         )
 
 
+def test_unclaimed_handoff_expires_before_late_takeover(tmp_path):
+    surface = FakeSurface()
+    coordinator = HandoffCoordinator(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+    )
+    request = coordinator.create_request(
+        goal="goal", capability_id="cap", step="step", reason="stuck", observation=surface.observe()
+    )
+
+    assert coordinator.wait_for_resume(request.intervention_id, timeout_s=0.01) is False
+    assert coordinator.get(request.intervention_id).state == HandoffState.CLOSED
+    with pytest.raises(RuntimeError, match="closed"):
+        coordinator.take_control(request.intervention_id, "late-reviewer")
+
+
 def test_handoff_deadline_rejects_actions_queued_after_a_slow_action(tmp_path):
     class SlowSurface(FakeSurface):
         def perform(self, action, locator=None, value=None, timeout_ms=5000):

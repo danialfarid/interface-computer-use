@@ -525,26 +525,42 @@ def _worker_guard_script() -> str:
 
     return """
 (() => {
-  if (!window.Worker || window.Worker.__cuaGuarded) return;
-  const OriginalWorker = window.Worker;
-  function GuardedWorker(url, options) {
+  const markWorkerUrl = (url) => {
     const target = new URL(url, window.location.href);
     if (target.protocol === 'http:' || target.protocol === 'https:') {
       target.searchParams.set('__cua_worker_guard', '1');
-      url = target.href;
+      return target.href;
     }
-    const worker = options === undefined ? new OriginalWorker(url) :
-      new OriginalWorker(url, options);
-    worker.addEventListener('error', (event) => {
+    return url;
+  };
+  const reportWorkerError = (event) => {
       if (String(event.message || '').toLowerCase().includes('websocket url is not allowlisted')) {
         setTimeout(() => { throw new Error('WebSocket URL is not allowlisted'); }, 0);
       }
-    });
-    return worker;
-  }
-  GuardedWorker.prototype = OriginalWorker.prototype;
-  GuardedWorker.__cuaGuarded = true;
-  window.Worker = GuardedWorker;
+  };
+  const wrapWorker = (name) => {
+    const OriginalWorker = window[name];
+    if (!OriginalWorker || OriginalWorker.__cuaGuarded) return;
+    function GuardedWorker(url, options) {
+      const worker = options === undefined ? new OriginalWorker(markWorkerUrl(url)) :
+        new OriginalWorker(markWorkerUrl(url), options);
+      if (typeof worker.addEventListener === 'function') {
+        worker.addEventListener('error', reportWorkerError);
+      }
+      if (worker.port) {
+        worker.port.addEventListener('message', (event) => {
+          if (event.data && event.data.__cuaError) reportWorkerError(event.data);
+        });
+        worker.port.start();
+      }
+      return worker;
+    }
+    GuardedWorker.prototype = OriginalWorker.prototype;
+    GuardedWorker.__cuaGuarded = true;
+    window[name] = GuardedWorker;
+  };
+  wrapWorker('Worker');
+  wrapWorker('SharedWorker');
 })();
 """
 
@@ -566,8 +582,20 @@ def _worker_websocket_prefix(origins: tuple[str, ...], route_prefixes: tuple[str
       (parsed.pathname === prefix || parsed.pathname.startsWith(prefix.replace(/\\/$/, '') + '/'))
     );
   };
+  const ports = [];
+  if (typeof self.addEventListener === 'function') {
+    self.addEventListener('connect', (event) => {
+      for (const port of event.ports || []) {
+        ports.push(port);
+        port.start();
+      }
+    });
+  }
   function GuardedWebSocket(url, protocols) {
-    if (!isAllowed(url)) throw new Error('WebSocket URL is not allowlisted');
+    if (!isAllowed(url)) {
+      for (const port of ports) port.postMessage({__cuaError: 'WebSocket URL is not allowlisted'});
+      throw new Error('WebSocket URL is not allowlisted');
+    }
     return protocols === undefined ? new original(url) : new original(url, protocols);
   }
   GuardedWebSocket.prototype = original.prototype;
