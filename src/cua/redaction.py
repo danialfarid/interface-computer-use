@@ -24,7 +24,7 @@ _PII_PATTERNS = (
     re.compile(r"\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b"),
     re.compile(r"\b\d{1,5}\s+[A-Z]{2,}(?:\s+[A-Z]{2,}){1,2}\b"),
     re.compile(r"\b[A-Z]{2,}(?:\s+[A-Z]{2,})+\b"),
-    re.compile(r"(?im)\b(?:member\s+)?(?:name|address)\s*:\s*[^\r\n]+"),
+    re.compile(r"(?im)\b(?:member\s+)?(?:name|address)\s*(?:[:\t])\s*[^\r\n]+"),
 )
 
 

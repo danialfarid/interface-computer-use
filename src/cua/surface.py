@@ -143,11 +143,7 @@ class BrowserSurface:
             self._route_installed = True
 
     def _route_request(self, route: Any, request: Any) -> None:
-        is_document = getattr(request, "resource_type", "") == "document"
-        is_protected = request.is_navigation_request() or is_document or getattr(
-            request, "resource_type", ""
-        ) in {"fetch", "xhr"}
-        if self._navigation_guard is None or not is_protected:
+        if self._navigation_guard is None:
             route.continue_()
             return
         try:

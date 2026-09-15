@@ -234,6 +234,27 @@ class DiscoveryRunner:
             self.evidence.event("run_resumed", intervention_id=request.intervention_id)
             self._handoff_used = True
             step_number = 0
+            try:
+                resumed_observation = self.surface.observe()
+            except SurfaceError as exc:
+                return self._surface_failure("post-handoff", exc)
+            if self._checkpoint_matches(resumed_observation) and not (
+                set(self.template.output_descriptions) - set(self.output_sources)
+            ):
+                try:
+                    artifact = self._artifact()
+                    artifact.validate()
+                    self.evidence.artifact_file(artifact)
+                except ValueError as exc:
+                    return self._failure(RunStatus.HARD_FAILURE, "post-handoff", "INVALID_ARTIFACT", str(exc))
+                result = RunResult(
+                    status=RunStatus.SUCCESS,
+                    run_id=self.evidence.run_id,
+                    outputs={"declared": sorted(self.output_sources)},
+                    evidence_dir=str(self.evidence.directory),
+                )
+                self.evidence.event("run_finished", result=result.to_dict())
+                return result, artifact
 
     def _execute_action(
         self,
@@ -332,9 +353,7 @@ class DiscoveryRunner:
             surface_kind=self.surface.kind,
             target={
                 **self.template.target,
-                "url": redact_url(
-                    _parameterize_text(self.template.target["url"], self.parameter_values)
-                ),
+                "url": self._safe_target_url(),
             },
             parameters=self.template.parameters,
             outputs=outputs,
@@ -349,6 +368,13 @@ class DiscoveryRunner:
         if len(self.template.output_descriptions) == 1:
             return next(iter(self.template.output_descriptions))
         raise SurfaceError(f"extract output is not declared: {name}")
+
+    def _safe_target_url(self) -> str:
+        parameterized = _parameterize_text(self.template.target["url"], self.parameter_values)
+        redacted = redact_url(parameterized)
+        if redacted != parameterized:
+            raise ValueError("target URL contains credentials or an unparameterized secret")
+        return parameterized
 
     def _record_human_action(self, step: ActionStep) -> None:
         if step.action is ActionType.EXTRACT:
@@ -444,8 +470,11 @@ def _parameterize_persisted_value(
     action: ActionType,
 ) -> str:
     result = _parameterize_text(value, parameter_values)
-    if action is ActionType.FILL and result == value and not _PARAMETER.fullmatch(value):
-        raise SurfaceError("refusing to persist an unparameterized fill value")
+    if action is ActionType.FILL and not _PARAMETER.fullmatch(result):
+        if value not in parameter_values.values():
+            raise SurfaceError("refusing to persist an unparameterized fill value")
+    if action is ActionType.NAVIGATE and redact_url(result) != result:
+        raise SurfaceError("refusing to persist a navigation containing credentials or a secret")
     return result
 
 

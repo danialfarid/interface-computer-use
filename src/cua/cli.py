@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
             return _run_discover(args)
         if args.command == "replay":
             return _run_replay(args)
-    except (LLMError, OSError, SurfaceError, ValueError) as exc:
+    except (LLMError, OSError, SurfaceError, PolicyViolation, ValueError) as exc:
         print(json.dumps({"status": "hard_failure", "error": str(exc)}), file=sys.stderr)
         return 1
     return 2

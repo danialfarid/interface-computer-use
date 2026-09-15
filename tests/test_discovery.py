@@ -291,7 +291,7 @@ def test_discovery_escalates_a_blocked_risky_action_to_human_control(tmp_path):
     assert artifact.steps[0].id == "human-search"
 
 
-def test_discovery_does_not_persist_sensitive_target_query_values(tmp_path):
+def test_discovery_rejects_sensitive_target_query_values(tmp_path):
     template = replace(
         _template(),
         target={
@@ -319,6 +319,6 @@ def test_discovery_does_not_persist_sensitive_target_query_values(tmp_path):
         parameter_values={"member_id": "1001"},
     ).run("look up member 1001")
 
-    assert result.status is RunStatus.SUCCESS
-    assert artifact is not None
-    assert "SyntheticSecret" not in artifact.to_json()
+    assert result.status is RunStatus.HARD_FAILURE
+    assert result.error_code == "INVALID_ARTIFACT"
+    assert artifact is None

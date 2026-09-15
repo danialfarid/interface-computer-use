@@ -17,6 +17,8 @@ def test_redaction_handles_bearer_and_key_formats_without_crashing():
     assert "hunter2" not in redacted
     assert "demo_user" not in redacted
     assert "synthetic_password" not in redacted
+    assert "JANE EXAMPLE" not in redact_text("Member name\tJANE EXAMPLE")
+    assert "jane example" not in redact_text("Member name\tjane example")
     assert "<REDACTED>" in redacted
 
 

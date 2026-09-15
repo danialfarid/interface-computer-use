@@ -9,6 +9,17 @@ import uuid
 from .redaction import redact_artifact_payload, redact_value
 
 
+def _redact_sensitive_names(value: Any, names: set[str]) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): "<REDACTED>" if str(key) in names else _redact_sensitive_names(item, names)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive_names(item, names) for item in value]
+    return value
+
+
 class EvidenceRecorder:
     """Append-only run evidence with redaction at the persistence boundary."""
 
@@ -25,7 +36,7 @@ class EvidenceRecorder:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "run_id": self.run_id,
             "kind": kind,
-            "payload": redact_value(kind, payload),
+            "payload": _redact_sensitive_names(redact_value(kind, payload), self.sensitive_names),
         }
         redacted_step = record["payload"].get("step")
         raw_step = payload.get("step")
@@ -52,6 +63,8 @@ class EvidenceRecorder:
         artifact.validate()
         path = self.directory / "artifact.json"
         payload = redact_artifact_payload(artifact.to_dict())
+        if payload.get("target", {}).get("url") != artifact.to_dict().get("target", {}).get("url"):
+            raise ValueError("artifact target URL contains credentials or an unparameterized secret")
         # Validate the exact payload that will be written. Redaction must never
         # turn a reviewable artifact into a contract the loader cannot accept.
         from .models import CapabilityArtifact
