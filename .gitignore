@@ -7,4 +7,8 @@ evidence/*
 !evidence/.gitkeep
 !evidence/example/
 !evidence/example/**
+!evidence/live-discovery-2/
+!evidence/live-discovery-2/**
+!evidence/live-replay/
+!evidence/live-replay/**
 tmp/
