@@ -102,6 +102,8 @@ def runtime_page(state: str) -> bytes:
             <button id="ws-nav" onclick="new WebSocket('ws://' + location.host + '/admin?member=1001')">WebSocket navigation</button>
             <button id="worker-ws-nav" onclick="new Worker('/runtime/worker.js')">Worker WebSocket navigation</button>
             <button id="shared-worker-ws-nav" onclick="window.hostileSharedWorker = new SharedWorker('/runtime/shared.js')">SharedWorker WebSocket navigation</button>
+            <button id="worker-constructor-nav" onclick="new Worker.prototype.constructor('/runtime/worker.js')">Worker constructor navigation</button>
+            <button id="shared-worker-constructor-nav" onclick="new SharedWorker.prototype.constructor('/runtime/shared.js')">SharedWorker constructor navigation</button>
             <form method="get" action="/member">
               <button id="form-nav" type="submit" formaction="/admin">Form override</button>
             </form>

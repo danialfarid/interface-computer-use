@@ -61,6 +61,17 @@ def test_evidence_redacts_readable_target_text_without_capitalization(tmp_path):
     assert "jane example" not in payload
 
 
+def test_evidence_redacts_sensitive_role_action_names(tmp_path):
+    evidence = EvidenceRecorder(tmp_path)
+    evidence.event(
+        "action",
+        step={"action": "click", "target": {"strategy": "role", "value": "link:alice smith"}},
+    )
+
+    record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
+    assert "alice smith" not in json.dumps(record["payload"])
+
+
 def test_evidence_redacts_uri_encoded_sensitive_values(tmp_path):
     evidence = EvidenceRecorder(tmp_path)
     evidence.sensitive_values.add("ab cd")

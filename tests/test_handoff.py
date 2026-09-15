@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import json
 import threading
@@ -60,6 +61,27 @@ def test_human_action_uses_same_surface_and_returns_control(tmp_path):
     assert coordinator.get(request.intervention_id).human_actions[0]["id"] == "human-1"
 
 
+def test_human_confirmation_requires_a_boolean(tmp_path):
+    surface = FakeSurface()
+    policy = GuardrailPolicy(
+        allowed_origins=("http://127.0.0.1:8765",),
+        risky_actions=frozenset({ActionType.CLICK}),
+    )
+    coordinator = HandoffCoordinator(surface, policy, EvidenceRecorder(tmp_path))
+    request = coordinator.create_request(
+        goal="goal", capability_id="cap", step="step", reason="stuck", observation=surface.observe()
+    )
+    coordinator.take_control(request.intervention_id, "reviewer")
+
+    with pytest.raises(ValueError, match="confirmed must be a boolean"):
+        coordinator.record_human_action(
+            request.intervention_id,
+            ActionStep("human-search", ActionType.CLICK, Locator("role", "button:Search")),
+            confirmed="false",
+        )
+    assert surface.actions == []
+
+
 def test_local_operator_api_transfers_and_resumes(tmp_path):
     surface = FakeSurface()
     coordinator = HandoffCoordinator(
@@ -88,6 +110,19 @@ def test_local_operator_api_transfers_and_resumes(tmp_path):
                 return json.loads(response.read())
 
         post(f"/interventions/{request.intervention_id}/take-control", {"operator": "reviewer"})
+        with pytest.raises(HTTPError) as error:
+            post(
+                f"/interventions/{request.intervention_id}/action",
+                {
+                    "action": {
+                        "id": "human-search",
+                        "action": "click",
+                        "target": {"strategy": "role", "value": "button:Search"},
+                    },
+                    "confirmed": "false",
+                },
+            )
+        assert "confirmed must be a boolean" in error.value.read().decode()
         result = post(f"/interventions/{request.intervention_id}/resume", {})
         assert result["state"] == HandoffState.RESUMED
     finally:

@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 import re
 from typing import Protocol
-from urllib.parse import quote, quote_plus
+from urllib.parse import parse_qsl, quote, quote_plus, urlsplit, urlunsplit
 
 from .evidence import EvidenceRecorder
 from .handoff import HandoffCoordinator
@@ -196,6 +196,17 @@ class DiscoveryRunner:
                             str(exc),
                         )
                     except (UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError) as exc:
+                        if self._try_handoff(
+                            goal,
+                            f"checkpoint-{step_number}",
+                            str(exc),
+                            None,
+                        ):
+                            completed = self._complete_after_handoff(f"checkpoint-{step_number}")
+                            if completed is not None:
+                                return completed
+                            step_number = 0
+                            continue
                         return self._surface_failure(f"checkpoint-{step_number}", exc)
                     business = self._business_outcome(current)
                     if business is not None:
@@ -267,6 +278,12 @@ class DiscoveryRunner:
             except PolicyViolation as exc:
                 return self._failure(RunStatus.HARD_FAILURE, "max-steps", "POLICY_BLOCKED", str(exc))
             except (UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError) as exc:
+                if self._try_handoff(goal, "max-steps", str(exc), None):
+                    completed = self._complete_after_handoff("max-steps")
+                    if completed is not None:
+                        return completed
+                    step_number = 0
+                    continue
                 return self._surface_failure("max-steps", exc)
             business = self._business_outcome(observation)
             if business is not None:
@@ -437,7 +454,7 @@ class DiscoveryRunner:
         raise SurfaceError(f"extract output is not declared: {name}")
 
     def _safe_target_url(self) -> str:
-        parameterized = _parameterize_text(self.template.target["url"], self.parameter_values)
+        parameterized = _parameterize_url(self.template.target["url"], self.parameter_values)
         redacted = redact_url(parameterized)
         if redacted != parameterized:
             raise ValueError("target URL contains credentials or an unparameterized secret")
@@ -577,7 +594,11 @@ def _parameterize_persisted_value(
     parameter_values: dict[str, str],
     action: ActionType,
 ) -> str:
-    result = _parameterize_text(value, parameter_values)
+    result = (
+        _parameterize_url(value, parameter_values)
+        if action is ActionType.NAVIGATE
+        else _parameterize_text(value, parameter_values)
+    )
     if action is ActionType.FILL and not _PARAMETER.fullmatch(result):
         if value not in parameter_values.values():
             raise SurfaceError("refusing to persist an unparameterized fill value")
@@ -587,3 +608,22 @@ def _parameterize_persisted_value(
 
 
 _PARAMETER = re.compile(r"\{\{[A-Za-z_][A-Za-z0-9_]*\}\}")
+
+
+def _parameterize_url(value: str, parameter_values: dict[str, str]) -> str:
+    parsed = urlsplit(value)
+    if not parsed.netloc and not parsed.path.startswith("/"):
+        return _parameterize_text(value, parameter_values)
+    query = "&".join(
+        f"{quote(key, safe='')}={quote(_parameterize_text(item, parameter_values), safe='{}')}"
+        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+    )
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            _parameterize_text(parsed.path, parameter_values),
+            query,
+            _parameterize_text(parsed.fragment, parameter_values),
+        )
+    )

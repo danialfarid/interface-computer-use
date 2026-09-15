@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from cua.discovery import DiscoveryRunner, DiscoveryTemplate, _parameterize_text
+from cua.discovery import DiscoveryRunner, DiscoveryTemplate, _parameterize_text, _parameterize_url
 from cua.evidence import EvidenceRecorder
 from cua.handoff import HandoffCoordinator
 from cua.llm import AgentAction, AgentDecision, LLMError, ScriptedDecisionClient
@@ -21,7 +21,7 @@ from cua.models import (
     RunStatus,
 )
 from cua.policy import GuardrailPolicy
-from cua.surface import Control, ReadableTarget, SurfaceObservation
+from cua.surface import Control, ReadableTarget, SurfaceAppError, SurfaceObservation
 
 
 class FakeSurface:
@@ -213,6 +213,12 @@ def test_parameterization_handles_uri_encoded_input_values():
     assert _parameterize_text(
         "/member?member=ab%20cd", {"member_id": "ab cd"}
     ) == "/member?member={{member_id}}"
+
+
+def test_parameterization_does_not_replace_numeric_input_inside_hostname():
+    assert _parameterize_url(
+        "http://127.0.0.1/member?member=127", {"member_id": "127"}
+    ) == "http://127.0.0.1/member?member={{member_id}}"
 
 
 def test_human_discovery_action_is_parameterized_before_artifact_recording(tmp_path):
@@ -466,6 +472,71 @@ def test_discovery_reports_business_outcome_after_llm_error_handoff(tmp_path):
     assert result.status is RunStatus.BUSINESS_OUTCOME
     assert result.outcome_code == "MEMBER_NOT_FOUND"
     assert artifact is None
+
+
+def test_discovery_hands_off_terminal_application_error(tmp_path):
+    class AppErrorAfterFillSurface(FakeSurface):
+        def __init__(self):
+            super().__init__()
+            self.broken = False
+
+        def observe(self):
+            if self.broken:
+                raise SurfaceAppError("application error page")
+            return super().observe()
+
+        def perform(self, action, locator=None, value=None, timeout_ms=5000):
+            if action is ActionType.NAVIGATE:
+                self.actions.append((action, locator, value))
+                self.page = "home"
+                self.broken = False
+                return
+            super().perform(action, locator, value, timeout_ms)
+            if action is ActionType.FILL:
+                self.broken = True
+
+    surface = AppErrorAfterFillSurface()
+    policy = GuardrailPolicy.local_demo("http://127.0.0.1:8765")
+    coordinator = HandoffCoordinator(surface, policy, EvidenceRecorder(tmp_path / "handoff"))
+    operator_errors = []
+
+    def operator():
+        try:
+            while not coordinator.list_requests():
+                time.sleep(0.01)
+            request = coordinator.list_requests()[0]
+            coordinator.take_control(request.intervention_id, "reviewer")
+            coordinator.record_human_action(
+                request.intervention_id,
+                ActionStep("human-recover", ActionType.NAVIGATE, value="http://127.0.0.1:8765/"),
+            )
+            coordinator.resume(request.intervention_id)
+        except Exception as exc:
+            operator_errors.append(exc)
+
+    worker = threading.Thread(target=operator)
+    worker.start()
+    result, artifact = DiscoveryRunner(
+        surface,
+        ScriptedDecisionClient([AgentDecision((AgentAction(ActionType.FILL, "control-0", value="1001"),))]),
+        policy,
+        EvidenceRecorder(tmp_path / "discovery"),
+        replace(
+            _template(),
+            output_descriptions={},
+            checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "Member Services Console", "lookup remains visible"),
+        ),
+        parameter_values={"member_id": "1001"},
+        max_steps=1,
+        handoff=coordinator,
+        handoff_wait_s=2,
+    ).run("recover application error")
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert not operator_errors
+    assert result.status is RunStatus.SUCCESS
+    assert artifact is not None
 
 
 def test_discovery_rejects_sensitive_target_query_values(tmp_path):

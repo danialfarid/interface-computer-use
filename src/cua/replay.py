@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 from typing import Any, Protocol
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
 from .evidence import EvidenceRecorder
 from .handoff import HandoffCoordinator
@@ -430,6 +430,9 @@ def _resolve_value(value: str | None, inputs: dict[str, Any], *, url: bool = Fal
     if value is None:
         return None
 
+    if url:
+        return _resolve_url(value, inputs)
+
     def replace(match: re.Match[str]) -> str:
         name = match.group(1)
         if name not in inputs:
@@ -437,3 +440,27 @@ def _resolve_value(value: str | None, inputs: dict[str, Any], *, url: bool = Fal
         return quote(str(inputs[name]), safe="") if url else str(inputs[name])
 
     return _PARAMETER.sub(replace, value)
+
+
+def _resolve_url(value: str, inputs: dict[str, Any]) -> str:
+    parsed = urlsplit(value)
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in inputs:
+            raise InputValidationError(f"step references missing input: {name}")
+        return quote(str(inputs[name]), safe="")
+
+    query = "&".join(
+        f"{quote(key, safe='')}={_PARAMETER.sub(replace, quote(item, safe='{}'))}"
+        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+    )
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            _PARAMETER.sub(replace, parsed.path),
+            query,
+            _PARAMETER.sub(replace, parsed.fragment),
+        )
+    )

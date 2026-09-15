@@ -123,6 +123,8 @@ def test_browser_surface_reports_unexpected_confirmation_dialog(tmp_path, demo_o
         (ActionType.CLICK, Locator("css", "#ws-nav"), None),
         (ActionType.CLICK, Locator("css", "#worker-ws-nav"), None),
         (ActionType.CLICK, Locator("css", "#shared-worker-ws-nav"), None),
+        (ActionType.CLICK, Locator("css", "#worker-constructor-nav"), None),
+        (ActionType.CLICK, Locator("css", "#shared-worker-constructor-nav"), None),
         (ActionType.CLICK, Locator("css", "#form-nav"), None),
         (ActionType.PRESS, Locator("css", "#enter-nav"), "Enter"),
     ],

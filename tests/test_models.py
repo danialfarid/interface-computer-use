@@ -4,6 +4,7 @@ import pytest
 from cua.models import (
     ActionStep,
     ActionType,
+    BusinessOutcome,
     CapabilityArtifact,
     Checkpoint,
     CheckpointKind,
@@ -108,6 +109,41 @@ def test_capability_rejects_invalid_typed_step_and_parameter_fields():
 
     with pytest.raises(ValueError, match="invalid capability artifact"):
         CapabilityArtifact.from_dict(payload)
+
+
+def test_capability_rejects_sensitive_role_locator_names():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={},
+        outputs={},
+        steps=(ActionStep("click", ActionType.CLICK, Locator("role", "link:alice smith")),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+
+    with pytest.raises(ValueError, match="sensitive text"):
+        artifact.validate()
+
+
+def test_capability_rejects_empty_business_outcome_fields():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={},
+        outputs={},
+        steps=(ActionStep("wait", ActionType.WAIT),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+        business_outcomes=(BusinessOutcome("", "description", "ready"),),
+    )
+
+    with pytest.raises(ValueError, match="business outcomes"):
+        artifact.validate()
 
 
 def test_capability_requires_extract_step_to_match_declared_output_source():

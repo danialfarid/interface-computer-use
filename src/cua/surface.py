@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
+import time
 from typing import Any, Callable
 from urllib.parse import urljoin, urlsplit
 
@@ -413,7 +414,8 @@ class BrowserSurface:
             elif action is ActionType.CLICK:
                 if locator is None:
                     raise SurfaceError("click requires a locator")
-                self.resolve(locator, timeout_ms).click(timeout=timeout_ms)
+                self.resolve(locator, timeout_ms).click(timeout=timeout_ms, no_wait_after=True)
+                self._wait_for_runtime_guard(timeout_ms, action.value)
                 self.page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
             elif action is ActionType.FILL:
                 if locator is None or value is None:
@@ -422,7 +424,8 @@ class BrowserSurface:
             elif action is ActionType.PRESS:
                 if locator is None or value is None:
                     raise SurfaceError("press requires a locator and key")
-                self.resolve(locator, timeout_ms).press(value, timeout=timeout_ms)
+                self.resolve(locator, timeout_ms).press(value, timeout=timeout_ms, no_wait_after=True)
+                self._wait_for_runtime_guard(timeout_ms, action.value)
             elif action is ActionType.WAIT:
                 delay_ms = int(value or "250")
                 if delay_ms < 0 or delay_ms > timeout_ms:
@@ -460,6 +463,18 @@ class BrowserSurface:
         blocked = self._take_blocked_navigation()
         if blocked is not None:
             raise blocked
+
+    def _wait_for_runtime_guard(self, timeout_ms: int, action: str) -> None:
+        """Give asynchronous route/page-error callbacks a bounded chance to run."""
+
+        deadline = time.monotonic() + min(timeout_ms, 250) / 1000
+        while self._blocked_navigation_error is None and self._page_error is None:
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                break
+            self.page.wait_for_timeout(min(10, remaining_ms))
+        self._raise_blocked_navigation()
+        self._raise_pending_page_error(action)
 
     def extract(self, locator: Locator, timeout_ms: int = 5_000) -> str:
         try:
@@ -521,7 +536,6 @@ def _worker_guard_script() -> str:
     function GuardedWorker(url, options) {
       throw new Error(`${name} is disabled by policy`);
     }
-    GuardedWorker.prototype = OriginalWorker.prototype;
     GuardedWorker.__cuaGuarded = true;
     window[name] = GuardedWorker;
   };

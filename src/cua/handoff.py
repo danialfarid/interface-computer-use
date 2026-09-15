@@ -146,6 +146,8 @@ class HandoffCoordinator:
         *,
         confirmed: bool = False,
     ) -> None:
+        if not isinstance(confirmed, bool):
+            raise ValueError("confirmed must be a boolean")
         pending = _PendingHumanAction(intervention_id, step, confirmed)
         if threading.get_ident() == self._owner_thread_id:
             self._apply_human_action(pending)
@@ -353,6 +355,9 @@ class HandoffServer:
                         result = coordinator.resume(intervention_id)
                     elif operation == "action":
                         action = body["action"]
+                        confirmed = body.get("confirmed", False)
+                        if not isinstance(confirmed, bool):
+                            raise ValueError("confirmed must be a boolean")
                         step = ActionStep(
                             id=str(action.get("id", "human-action")),
                             action=ActionType(str(action["action"])),
@@ -365,7 +370,7 @@ class HandoffServer:
                         coordinator.record_human_action(
                             intervention_id,
                             step,
-                            confirmed=bool(body.get("confirmed", False)),
+                            confirmed=confirmed,
                         )
                         result = coordinator.get(intervention_id)
                     else:

@@ -6,6 +6,8 @@ from enum import StrEnum
 import json
 from typing import Any, Mapping
 
+from .redaction import redact_text
+
 
 SUPPORTED_SCHEMA_VERSION = "1.0"
 
@@ -272,12 +274,17 @@ class CapabilityArtifact:
                 raise ValueError(f"unsupported output type for {name}: {spec.type}")
             if spec.source.strategy == "text":
                 raise ValueError(f"output source for {name} cannot use a text locator")
+            _validate_locator_persistence(spec.source, f"output {name}")
         if not self.steps:
             raise ValueError("a capability must contain at least one step")
         extracted_outputs: set[str] = set()
         for step in self.steps:
             if not step.id or step.timeout_ms < 1:
                 raise ValueError(f"step {step.id!r} must have a positive timeout")
+            if step.target is not None:
+                if step.target.strategy == "text":
+                    raise ValueError(f"step {step.id} cannot persist a text locator")
+                _validate_locator_persistence(step.target, f"step {step.id}")
             if step.action is ActionType.EXTRACT:
                 if step.target is None or step.value not in self.outputs:
                     raise ValueError(f"extract step {step.id} must name a declared output")
@@ -287,6 +294,12 @@ class CapabilityArtifact:
         missing_outputs = sorted(set(self.outputs) - extracted_outputs)
         if missing_outputs:
             raise ValueError("declared output(s) have no extraction step: " + ", ".join(missing_outputs))
+        for outcome in self.business_outcomes:
+            if not all(
+                isinstance(item, str) and item
+                for item in (outcome.code, outcome.description, outcome.detection_text)
+            ):
+                raise ValueError("business outcomes require non-empty string fields")
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "CapabilityArtifact":
@@ -380,6 +393,15 @@ class CapabilityArtifact:
         )
         artifact.validate()
         return artifact
+
+
+def _validate_locator_persistence(locator: Locator, owner: str) -> None:
+    if locator.strategy not in Locator.SUPPORTED_STRATEGIES:
+        raise ValueError(f"{owner} has an unsupported locator strategy: {locator.strategy}")
+    if redact_text(locator.value) != locator.value:
+        raise ValueError(f"{owner} locator appears to contain sensitive text")
+    for fallback in locator.fallback:
+        _validate_locator_persistence(fallback, owner)
 
 
 class RunStatus(StrEnum):
