@@ -210,15 +210,16 @@ class DiscoveryRunner:
                 raise SurfaceError("extract requires target_id and output_name")
             if locator.strategy == "text" and any(char.isdigit() for char in locator.value):
                 raise SurfaceError("refusing to persist a dynamic value as an output locator")
-            self.output_sources[action.output_name] = locator
+            output_name = self._declared_output_name(action.output_name)
+            self.output_sources[output_name] = locator
             value = self.surface.extract(locator)
-            self.evidence.event("extraction", name=action.output_name, value=value)
+            self.evidence.event("extraction", name=output_name, value=value)
             self.recorded_steps.append(
                 ActionStep(
                     f"step-{step_number}-{action_number}",
                     ActionType.EXTRACT,
                     locator,
-                    action.output_name,
+                    output_name,
                     description=_safe_description(action.reason, self.parameter_values),
                 )
             )
@@ -276,6 +277,13 @@ class DiscoveryRunner:
             checkpoint=self.template.checkpoint,
             business_outcomes=self.template.business_outcomes,
         )
+
+    def _declared_output_name(self, name: str) -> str:
+        if name in self.template.output_descriptions:
+            return name
+        if len(self.template.output_descriptions) == 1:
+            return next(iter(self.template.output_descriptions))
+        raise SurfaceError(f"extract output is not declared: {name}")
 
     def _failure(self, status: RunStatus, step: str, code: str, message: str) -> tuple[RunResult, None]:
         result = RunResult(

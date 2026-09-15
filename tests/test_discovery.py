@@ -167,3 +167,29 @@ def test_discovery_requires_all_declared_outputs_before_success(tmp_path):
     assert result.status is RunStatus.HARD_FAILURE
     assert result.error_code == "OUTPUTS_MISSING"
     assert artifact is None
+
+
+def test_discovery_maps_model_output_name_to_single_declared_output(tmp_path):
+    client = ScriptedDecisionClient(
+        [
+            AgentDecision((AgentAction(ActionType.FILL, "control-0", value="1001"),)),
+            AgentDecision((AgentAction(ActionType.CLICK, "control-1"),)),
+            AgentDecision(
+                (AgentAction(ActionType.EXTRACT, target_id="target-0", output_name="balance for 1001"),),
+                done=True,
+            ),
+        ]
+    )
+    result, artifact = DiscoveryRunner(
+        FakeSurface(),
+        client,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+        _template(),
+        parameter_values={"member_id": "1001"},
+    ).run("look up member 1001")
+
+    assert result.status is RunStatus.SUCCESS
+    assert artifact is not None
+    assert set(artifact.outputs) == {"balance"}
+    assert "1001" not in artifact.to_json()
