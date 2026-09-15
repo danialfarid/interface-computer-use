@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import re
 from typing import Any, Callable
@@ -89,7 +90,10 @@ class BrowserSurface:
         self._navigation_guard: Callable[[str], None] | None = None
         self._blocked_navigation_error: Exception | None = None
         self._route_installed = False
+        self._sensitive_values: set[str] = set()
+        self._page_error: str | None = None
         self.page.on("dialog", self._handle_dialog)
+        self.page.on("pageerror", self._handle_page_error)
 
     @classmethod
     def open(
@@ -141,6 +145,16 @@ class BrowserSurface:
         if not self._route_installed:
             self._context.route("**/*", self._route_request)
             self._route_installed = True
+        policy = getattr(guard, "__self__", None)
+        if policy is not None and hasattr(policy, "allowed_origins"):
+            script = _websocket_guard_script(
+                tuple(policy.allowed_origins), tuple(policy.allowed_route_prefixes)
+            )
+            self._context.add_init_script(script)
+            self.page.evaluate(script)
+
+    def set_sensitive_values(self, values: set[str]) -> None:
+        self._sensitive_values.update(str(value) for value in values if value)
 
     def _route_request(self, route: Any, request: Any) -> None:
         if self._navigation_guard is None:
@@ -183,6 +197,18 @@ class BrowserSurface:
             dialog.dismiss()
         except Exception:
             return
+
+    def _handle_page_error(self, error: Any) -> None:
+        self._page_error = str(error)
+
+    def _raise_pending_page_error(self, action: str) -> None:
+        if self._page_error is None:
+            return
+        message = self._page_error
+        self._page_error = None
+        if "websocket url is not allowlisted" in message.lower():
+            raise PolicyViolation("WebSocket URL is not allowlisted")
+        raise SurfaceAppError(f"{action} produced a page error: {message}")
 
     def _raise_pending_dialog(self, action: str) -> None:
         if self._unexpected_dialog is None:
@@ -383,6 +409,8 @@ class BrowserSurface:
             if blocked is not None:
                 raise blocked
             message = str(exc).lower()
+            if "websocket url is not allowlisted" in message:
+                raise PolicyViolation("WebSocket URL is not allowlisted") from exc
             if "dialog" in message or "confirmation" in message:
                 raise UnexpectedDialog(f"{action.value} was blocked by an unexpected dialog: {exc}") from exc
             if "application error" in message:
@@ -391,6 +419,7 @@ class BrowserSurface:
                 raise SurfaceTimeout(f"{action.value} timed out: {exc}") from exc
             raise SurfaceError(f"{action.value} failed: {exc}") from exc
         self._raise_blocked_navigation()
+        self._raise_pending_page_error(action.value)
         self._raise_pending_dialog(action.value)
 
     def _raise_blocked_navigation(self) -> None:
@@ -410,8 +439,41 @@ class BrowserSurface:
         directory.mkdir(parents=True, exist_ok=True)
         snapshot = directory / f"{stem}.txt"
         text = str(self.page.locator("body").inner_text())
-        snapshot.write_text(redact_text(text), encoding="utf-8")
+        redacted = redact_text(text)
+        for value in sorted(self._sensitive_values, key=len, reverse=True):
+            redacted = redacted.replace(value, "<REDACTED>")
+        snapshot.write_text(redacted, encoding="utf-8")
         return None, snapshot
+
+
+def _websocket_guard_script(origins: tuple[str, ...], route_prefixes: tuple[str, ...]) -> str:
+    return """
+(() => {
+  const allowedOrigins = %s;
+  const allowedPrefixes = %s;
+  const original = window.WebSocket;
+  const isAllowed = (raw) => {
+    const parsed = new URL(raw, window.location.href);
+    const origin = parsed.protocol === 'wss:' ? `https://${parsed.host}` : `http://${parsed.host}`;
+    if (!allowedOrigins.includes(origin)) return false;
+    if (!allowedPrefixes.length) return true;
+    return allowedPrefixes.some((prefix) =>
+      prefix === '/' ? parsed.pathname === '/' :
+      (parsed.pathname === prefix || parsed.pathname.startsWith(prefix.replace(/\\/$/, '') + '/'))
+    );
+  };
+  function GuardedWebSocket(url, protocols) {
+    if (!isAllowed(url)) throw new Error('WebSocket URL is not allowlisted');
+    return protocols === undefined ? new original(url) : new original(url, protocols);
+  }
+  GuardedWebSocket.prototype = original.prototype;
+  GuardedWebSocket.CONNECTING = original.CONNECTING;
+  GuardedWebSocket.OPEN = original.OPEN;
+  GuardedWebSocket.CLOSING = original.CLOSING;
+  GuardedWebSocket.CLOSED = original.CLOSED;
+  window.WebSocket = GuardedWebSocket;
+})();
+""" % (json.dumps(origins), json.dumps(route_prefixes))
 
 
 def _quote_css(value: str) -> str:

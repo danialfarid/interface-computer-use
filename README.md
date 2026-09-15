@@ -73,7 +73,7 @@ PYTHONPATH=src .venv/bin/python -m cua.cli discover \
   --member-id 1001 --handoff --handoff-wait 300
 ```
 
-The printed endpoint supports `GET /interventions`, then `POST /interventions/{id}/take-control`, `POST /interventions/{id}/action`, and `POST /interventions/{id}/resume`. Actions go through the same live browser surface and guardrail policy. The localhost API is intentionally minimal and is not an internet-facing operator console.
+The printed endpoint supports `GET /interventions`, then `POST /interventions/{id}/take-control`, `POST /interventions/{id}/action`, and `POST /interventions/{id}/resume`. Actions go through the same live browser surface and guardrail policy. The localhost API is intentionally minimal and is not an internet-facing operator console. If the operator sends an `extract` action, the typed value is returned to the paused runner in memory; it is never written as raw evidence.
 
 Replay can expose the same handoff boundary when a fixed step is blocked or the surface fails:
 

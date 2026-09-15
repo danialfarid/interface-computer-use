@@ -88,11 +88,16 @@ class DiscoveryRunner:
         self.evidence.sensitive_names.update(
             name for name, spec in self.template.output_descriptions.items() if spec[2]
         )
+        self.evidence.sensitive_values.update(self.parameter_values.values())
+        set_sensitive_values = getattr(self.surface, "set_sensitive_values", None)
+        if callable(set_sensitive_values):
+            set_sensitive_values(set(self.parameter_values.values()))
         set_navigation_guard = getattr(self.surface, "set_navigation_guard", None)
         if callable(set_navigation_guard):
             set_navigation_guard(self.policy.check_url)
         if self.handoff is not None:
             self.handoff.on_human_action = self._record_human_action
+            self.handoff.on_human_output = self._validate_human_output
 
     def run(self, goal: str) -> tuple[RunResult, CapabilityArtifact | None]:
         self.evidence.event("run_started", mode="discovery", goal=goal, target=self.template.target)
@@ -394,6 +399,11 @@ class DiscoveryRunner:
                 description=_safe_description(step.description, self.parameter_values),
             )
         self.recorded_steps.append(recorded)
+
+    def _validate_human_output(self, step: ActionStep, value: str) -> None:
+        if step.target is not None and step.target.strategy == "text":
+            if any(char.isdigit() for char in step.target.value) or step.target.value.strip() == value.strip():
+                raise SurfaceError("refusing to persist a dynamic human output locator")
 
     def _try_handoff(
         self,

@@ -20,6 +20,19 @@ def _redact_sensitive_names(value: Any, names: set[str]) -> Any:
     return value
 
 
+def _redact_sensitive_values(value: Any, sensitive_values: set[str]) -> Any:
+    if isinstance(value, str):
+        result = value
+        for secret in sorted((item for item in sensitive_values if item), key=len, reverse=True):
+            result = result.replace(secret, "<REDACTED>")
+        return result
+    if isinstance(value, dict):
+        return {str(key): _redact_sensitive_values(item, sensitive_values) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_sensitive_values(item, sensitive_values) for item in value]
+    return value
+
+
 class EvidenceRecorder:
     """Append-only run evidence with redaction at the persistence boundary."""
 
@@ -29,6 +42,7 @@ class EvidenceRecorder:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.log_path = self.directory / "events.jsonl"
         self.sensitive_names: set[str] = set()
+        self.sensitive_values: set[str] = set()
 
     def event(self, kind: str, **payload: Any) -> None:
         sensitive_output = payload.get("name") in self.sensitive_names
@@ -36,7 +50,10 @@ class EvidenceRecorder:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "run_id": self.run_id,
             "kind": kind,
-            "payload": _redact_sensitive_names(redact_value(kind, payload), self.sensitive_names),
+            "payload": _redact_sensitive_values(
+                _redact_sensitive_names(redact_value(kind, payload), self.sensitive_names),
+                self.sensitive_values,
+            ),
         }
         redacted_step = record["payload"].get("step")
         raw_step = payload.get("step")

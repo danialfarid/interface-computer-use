@@ -217,12 +217,12 @@ class HandoffCoordinator:
             intervention_id=pending.intervention_id,
             operator=request.operator,
             step=action,
-            extracted_value=extracted,
+            extracted_value="<REDACTED>" if extracted is not None else None,
         )
-        if self.on_human_action is not None:
-            self.on_human_action(pending.step)
         if extracted is not None and self.on_human_output is not None:
             self.on_human_output(pending.step, extracted)
+        if self.on_human_action is not None:
+            self.on_human_action(pending.step)
 
     def resume(self, intervention_id: str) -> InterventionRequest:
         with self._condition:

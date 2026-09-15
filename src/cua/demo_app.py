@@ -99,6 +99,7 @@ def runtime_page(state: str) -> bytes:
             <h2>Hostile navigation fixtures</h2>
             <button id="js-nav" onclick="location.href='/admin'">Script navigation</button>
             <button id="fetch-nav" onclick="fetch('/admin?member=1001')">Script fetch</button>
+            <button id="ws-nav" onclick="new WebSocket('ws://' + location.host + '/admin?member=1001')">WebSocket navigation</button>
             <form method="get" action="/member">
               <button id="form-nav" type="submit" formaction="/admin">Form override</button>
             </form>

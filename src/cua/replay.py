@@ -64,6 +64,10 @@ class ReplayRunner:
         self.evidence.sensitive_names.update(
             name for name, spec in self.artifact.outputs.items() if spec.sensitive
         )
+        self.evidence.sensitive_values.update(str(value) for value in self.inputs.values())
+        set_sensitive_values = getattr(self.surface, "set_sensitive_values", None)
+        if callable(set_sensitive_values):
+            set_sensitive_values({str(value) for value in self.inputs.values()})
         set_navigation_guard = getattr(self.surface, "set_navigation_guard", None)
         if callable(set_navigation_guard):
             set_navigation_guard(self.policy.check_url)

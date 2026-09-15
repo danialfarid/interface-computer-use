@@ -291,6 +291,55 @@ def test_discovery_escalates_a_blocked_risky_action_to_human_control(tmp_path):
     assert artifact.steps[0].id == "human-search"
 
 
+def test_discovery_accepts_complete_human_work_at_the_step_budget_boundary(tmp_path):
+    surface = FakeSurface()
+    policy = GuardrailPolicy.local_demo("http://127.0.0.1:8765")
+    coordinator = HandoffCoordinator(surface, policy, EvidenceRecorder(tmp_path / "handoff"))
+    operator_errors = []
+
+    def operator():
+        try:
+            while not coordinator.list_requests():
+                time.sleep(0.01)
+            request = coordinator.list_requests()[0]
+            coordinator.take_control(request.intervention_id, "reviewer")
+            coordinator.record_human_action(
+                request.intervention_id,
+                ActionStep("human-fill", ActionType.FILL, Locator("label", "Member ID"), "1001"),
+            )
+            coordinator.record_human_action(
+                request.intervention_id,
+                ActionStep("human-search", ActionType.CLICK, Locator("role", "button:Search")),
+            )
+            coordinator.record_human_action(
+                request.intervention_id,
+                ActionStep("human-read", ActionType.EXTRACT, Locator("css", "#balance-value"), "balance"),
+            )
+            coordinator.resume(request.intervention_id)
+        except Exception as exc:
+            operator_errors.append(exc)
+
+    worker = threading.Thread(target=operator)
+    worker.start()
+    result, artifact = DiscoveryRunner(
+        surface,
+        ScriptedDecisionClient([AgentDecision(())]),
+        policy,
+        EvidenceRecorder(tmp_path / "discovery"),
+        _template(),
+        parameter_values={"member_id": "1001"},
+        max_steps=1,
+        handoff=coordinator,
+        handoff_wait_s=2,
+    ).run("look up member 1001")
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert not operator_errors
+    assert result.status is RunStatus.SUCCESS
+    assert artifact is not None
+
+
 def test_discovery_rejects_sensitive_target_query_values(tmp_path):
     template = replace(
         _template(),
