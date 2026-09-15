@@ -132,7 +132,7 @@ def _run_replay(args: argparse.Namespace) -> int:
     inputs = _coerce_inputs(_parse_inputs(args.input), artifact)
     target_url = artifact.target["url"]
     try:
-        target_url = _resolve_value(target_url, inputs) or target_url
+        target_url = _resolve_value(target_url, inputs, url=True) or target_url
     except InputValidationError:
         # ReplayRunner still returns the normal structured INVALID_INPUT result.
         pass

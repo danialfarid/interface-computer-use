@@ -18,7 +18,7 @@ from cua.models import (
     RunStatus,
 )
 from cua.policy import GuardrailPolicy
-from cua.replay import ReplayRunner
+from cua.replay import ReplayRunner, _resolve_value
 from cua.surface import SurfaceError, SurfaceObservation, SurfaceTimeout
 
 
@@ -93,6 +93,14 @@ def test_replay_is_model_free_and_substitutes_inputs(tmp_path):
     assert result.status is RunStatus.SUCCESS
     assert result.outputs == {"balance": "$1,240.50"}
     assert surface.seen_values == ["1001"]
+
+
+def test_replay_url_substitution_preserves_query_component_encoding():
+    assert _resolve_value(
+        "http://127.0.0.1:8765/member?member={{member_id}}",
+        {"member_id": "ab+cd & ef#gh"},
+        url=True,
+    ) == "http://127.0.0.1:8765/member?member=ab%2Bcd%20%26%20ef%23gh"
 
 
 def test_replay_surfaces_not_found_as_business_outcome(tmp_path):
