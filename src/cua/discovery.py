@@ -117,6 +117,10 @@ class DiscoveryRunner:
                 step_number += 1
                 try:
                     observation = self.surface.observe()
+                except PolicyViolation as exc:
+                    if self._try_handoff(goal, f"observation-{step_number}", str(exc), None):
+                        continue
+                    return self._failure(RunStatus.HARD_FAILURE, f"observation-{step_number}", "POLICY_BLOCKED", str(exc))
                 except (UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError) as exc:
                     if self._try_handoff(goal, f"observation-{step_number}", str(exc), None):
                         continue
@@ -162,6 +166,13 @@ class DiscoveryRunner:
                 if decision.done:
                     try:
                         current = self.surface.observe()
+                    except PolicyViolation as exc:
+                        return self._failure(
+                            RunStatus.HARD_FAILURE,
+                            f"checkpoint-{step_number}",
+                            "POLICY_BLOCKED",
+                            str(exc),
+                        )
                     except (UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError) as exc:
                         return self._surface_failure(f"checkpoint-{step_number}", exc)
                     if self._checkpoint_matches(current):
@@ -200,6 +211,48 @@ class DiscoveryRunner:
                         "discovery checkpoint was not met",
                         current,
                     ):
+                        try:
+                            resumed = self.surface.observe()
+                        except PolicyViolation as exc:
+                            return self._failure(
+                                RunStatus.HARD_FAILURE,
+                                f"checkpoint-{step_number}",
+                                "POLICY_BLOCKED",
+                                str(exc),
+                            )
+                        except (UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError) as exc:
+                            return self._surface_failure(f"checkpoint-{step_number}", exc)
+                        if self._checkpoint_matches(resumed):
+                            missing_outputs = sorted(
+                                set(self.template.output_descriptions) - set(self.output_sources)
+                            )
+                            if missing_outputs:
+                                return self._failure(
+                                    RunStatus.HARD_FAILURE,
+                                    f"decision-{step_number}",
+                                    "OUTPUTS_MISSING",
+                                    "discovery did not record required output(s): "
+                                    + ", ".join(missing_outputs),
+                                )
+                            try:
+                                artifact = self._artifact()
+                                artifact.validate()
+                                self.evidence.artifact_file(artifact)
+                            except ValueError as exc:
+                                return self._failure(
+                                    RunStatus.HARD_FAILURE,
+                                    f"decision-{step_number}",
+                                    "INVALID_ARTIFACT",
+                                    str(exc),
+                                )
+                            result = RunResult(
+                                status=RunStatus.SUCCESS,
+                                run_id=self.evidence.run_id,
+                                outputs={"declared": sorted(self.output_sources)},
+                                evidence_dir=str(self.evidence.directory),
+                            )
+                            self.evidence.event("run_finished", result=result.to_dict())
+                            return result, artifact
                         continue
                     return self._failure(
                         RunStatus.HARD_FAILURE,
@@ -210,6 +263,8 @@ class DiscoveryRunner:
 
             try:
                 observation = self.surface.observe()
+            except PolicyViolation as exc:
+                return self._failure(RunStatus.HARD_FAILURE, "max-steps", "POLICY_BLOCKED", str(exc))
             except (UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError) as exc:
                 return self._surface_failure("max-steps", exc)
             if self.handoff is None or self._handoff_used:
@@ -241,6 +296,8 @@ class DiscoveryRunner:
             step_number = 0
             try:
                 resumed_observation = self.surface.observe()
+            except PolicyViolation as exc:
+                return self._failure(RunStatus.HARD_FAILURE, "post-handoff", "POLICY_BLOCKED", str(exc))
             except SurfaceError as exc:
                 return self._surface_failure("post-handoff", exc)
             if self._checkpoint_matches(resumed_observation) and not (
@@ -301,6 +358,10 @@ class DiscoveryRunner:
                 )
             value = self.surface.extract(locator)
             self.output_sources[output_name] = locator
+            self.evidence.sensitive_values.add(value)
+            set_sensitive_values = getattr(self.surface, "set_sensitive_values", None)
+            if callable(set_sensitive_values):
+                set_sensitive_values({value})
             self.evidence.event("extraction", name=output_name, value=value)
             self.recorded_steps.append(extract_step)
             return
@@ -417,7 +478,7 @@ class DiscoveryRunner:
         if observation is None:
             try:
                 observation = self.surface.observe()
-            except SurfaceError:
+            except (PolicyViolation, SurfaceError):
                 observation = SurfaceObservation(self.surface.url, "", "", ())
         request = self.handoff.create_request(
             goal=goal,

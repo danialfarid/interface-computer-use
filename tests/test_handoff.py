@@ -192,3 +192,55 @@ def test_expired_handoff_closes_control_and_rejects_late_actions(tmp_path):
             request.intervention_id,
             ActionStep("late", ActionType.CLICK, Locator("role", "button:Search")),
         )
+
+
+def test_handoff_deadline_rejects_actions_queued_after_a_slow_action(tmp_path):
+    class SlowSurface(FakeSurface):
+        def perform(self, action, locator=None, value=None, timeout_ms=5000):
+            if action is ActionType.WAIT:
+                time.sleep(int(value or "0") / 1000)
+            super().perform(action, locator, value, timeout_ms)
+
+    surface = SlowSurface()
+    coordinator = HandoffCoordinator(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+    )
+    request = coordinator.create_request(
+        goal="goal", capability_id="cap", step="step", reason="stuck", observation=surface.observe()
+    )
+    coordinator.take_control(request.intervention_id, "reviewer")
+    errors: list[Exception] = []
+
+    def submit(step):
+        try:
+            coordinator.record_human_action(request.intervention_id, step)
+        except Exception as exc:
+            errors.append(exc)
+
+    slow = threading.Thread(
+        target=submit,
+        args=(ActionStep("slow", ActionType.WAIT, value="100"),),
+    )
+    late = threading.Thread(
+        target=submit,
+        args=(ActionStep("late", ActionType.FILL, Locator("role", "input:Member ID"), "secret"),),
+    )
+    slow.start()
+    while len(coordinator._pending_actions) < 1:
+        time.sleep(0.001)
+    late.start()
+    while len(coordinator._pending_actions) < 2:
+        time.sleep(0.001)
+
+    assert coordinator.wait_for_resume(request.intervention_id, timeout_s=0.05) is False
+    slow.join(timeout=2)
+    late.join(timeout=2)
+
+    assert not slow.is_alive()
+    assert not late.is_alive()
+    assert [action[0] for action in surface.actions] == [ActionType.WAIT]
+    assert len(errors) == 1
+    assert "expired" in str(errors[0])
+    assert coordinator.get(request.intervention_id).state == HandoffState.CLOSED

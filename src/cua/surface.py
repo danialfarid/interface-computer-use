@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Callable
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from .models import ActionType, Locator
 from .policy import PolicyViolation
@@ -90,6 +90,8 @@ class BrowserSurface:
         self._navigation_guard: Callable[[str], None] | None = None
         self._blocked_navigation_error: Exception | None = None
         self._route_installed = False
+        self._websocket_route_installed = False
+        self._worker_websocket_prefix: bytes | None = None
         self._sensitive_values: set[str] = set()
         self._page_error: str | None = None
         self.page.on("dialog", self._handle_dialog)
@@ -145,13 +147,24 @@ class BrowserSurface:
         if not self._route_installed:
             self._context.route("**/*", self._route_request)
             self._route_installed = True
+        if not self._websocket_route_installed:
+            route_web_socket = getattr(self._context, "route_web_socket", None)
+            if not callable(route_web_socket):
+                route_web_socket = getattr(self.page, "route_web_socket", None)
+            if callable(route_web_socket):
+                route_web_socket("**/*", self._route_websocket)
+                self._websocket_route_installed = True
         policy = getattr(guard, "__self__", None)
         if policy is not None and hasattr(policy, "allowed_origins"):
-            script = _websocket_guard_script(
-                tuple(policy.allowed_origins), tuple(policy.allowed_route_prefixes)
-            )
+            origins = tuple(policy.allowed_origins)
+            route_prefixes = tuple(policy.allowed_route_prefixes)
+            script = _websocket_guard_script(origins, route_prefixes)
+            worker_script = _worker_guard_script()
+            self._worker_websocket_prefix = _worker_websocket_prefix(origins, route_prefixes).encode()
             self._context.add_init_script(script)
+            self._context.add_init_script(worker_script)
             self.page.evaluate(script)
+            self.page.evaluate(worker_script)
 
     def set_sensitive_values(self, values: set[str]) -> None:
         self._sensitive_values.update(str(value) for value in values if value)
@@ -168,13 +181,37 @@ class BrowserSurface:
             if location:
                 self._navigation_guard(urljoin(request_url, location))
                 raise PolicyViolation("redirect responses are not permitted by the route allowlist")
-            route.fulfill(response=response)
+            if _is_worker_guard_request(request_url):
+                headers = dict(response.headers)
+                headers.pop("content-encoding", None)
+                headers.pop("content-length", None)
+                route.fulfill(
+                    status=response.status,
+                    headers=headers,
+                    body=(self._worker_websocket_prefix or b"") + response.body(),
+                )
+            else:
+                route.fulfill(response=response)
             return
         except Exception as exc:
             self._blocked_navigation_error = exc
             route.abort(error_code="blockedbyclient")
             return
         route.continue_()
+
+    def _route_websocket(self, websocket: Any) -> None:
+        """Enforce the same destination policy for page and worker sockets."""
+
+        if self._navigation_guard is None:
+            websocket.connect_to_server()
+            return
+        try:
+            self._navigation_guard(_websocket_policy_url(str(websocket.url)))
+        except Exception as exc:
+            self._blocked_navigation_error = exc
+            websocket.close(code=1008, reason="WebSocket URL is not allowlisted")
+            return
+        websocket.connect_to_server()
 
     def observe(self) -> SurfaceObservation:
         try:
@@ -185,6 +222,9 @@ class BrowserSurface:
             title = str(self.page.title())
             controls = tuple(self._controls())
             readable_targets = tuple(self._readable_targets())
+            self._raise_blocked_navigation()
+            self._raise_pending_page_error("observe")
+            self._raise_pending_dialog("observe")
             return SurfaceObservation(self.url, title, text, controls, readable_targets)
         except SurfaceError:
             raise
@@ -384,6 +424,10 @@ class BrowserSurface:
                 if locator is None:
                     raise SurfaceError("click requires a locator")
                 self.resolve(locator, timeout_ms).click(timeout=timeout_ms)
+                # Worker failures are reported to the owning page on the next
+                # browser turn; give asynchronous guard failures a bounded
+                # chance to surface before recording the action.
+                self.page.wait_for_timeout(100)
                 self.page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
             elif action is ActionType.FILL:
                 if locator is None or value is None:
@@ -474,6 +518,77 @@ def _websocket_guard_script(origins: tuple[str, ...], route_prefixes: tuple[str,
   window.WebSocket = GuardedWebSocket;
 })();
 """ % (json.dumps(origins), json.dumps(route_prefixes))
+
+
+def _worker_guard_script() -> str:
+    """Tag HTTP workers so their source can receive the same socket guard."""
+
+    return """
+(() => {
+  if (!window.Worker || window.Worker.__cuaGuarded) return;
+  const OriginalWorker = window.Worker;
+  function GuardedWorker(url, options) {
+    const target = new URL(url, window.location.href);
+    if (target.protocol === 'http:' || target.protocol === 'https:') {
+      target.searchParams.set('__cua_worker_guard', '1');
+      url = target.href;
+    }
+    const worker = options === undefined ? new OriginalWorker(url) :
+      new OriginalWorker(url, options);
+    worker.addEventListener('error', (event) => {
+      if (String(event.message || '').toLowerCase().includes('websocket url is not allowlisted')) {
+        setTimeout(() => { throw new Error('WebSocket URL is not allowlisted'); }, 0);
+      }
+    });
+    return worker;
+  }
+  GuardedWorker.prototype = OriginalWorker.prototype;
+  GuardedWorker.__cuaGuarded = true;
+  window.Worker = GuardedWorker;
+})();
+"""
+
+
+def _worker_websocket_prefix(origins: tuple[str, ...], route_prefixes: tuple[str, ...]) -> str:
+    return """
+(() => {
+  const allowedOrigins = %s;
+  const allowedPrefixes = %s;
+  const original = self.WebSocket;
+  if (!original || original.__cuaGuarded) return;
+  const isAllowed = (raw) => {
+    const parsed = new URL(raw, self.location.href);
+    const origin = parsed.protocol === 'wss:' ? `https://${parsed.host}` : `http://${parsed.host}`;
+    if (!allowedOrigins.includes(origin)) return false;
+    if (!allowedPrefixes.length) return true;
+    return allowedPrefixes.some((prefix) =>
+      prefix === '/' ? parsed.pathname === '/' :
+      (parsed.pathname === prefix || parsed.pathname.startsWith(prefix.replace(/\\/$/, '') + '/'))
+    );
+  };
+  function GuardedWebSocket(url, protocols) {
+    if (!isAllowed(url)) throw new Error('WebSocket URL is not allowlisted');
+    return protocols === undefined ? new original(url) : new original(url, protocols);
+  }
+  GuardedWebSocket.prototype = original.prototype;
+  GuardedWebSocket.__cuaGuarded = true;
+  self.WebSocket = GuardedWebSocket;
+})();
+""" % (json.dumps(origins), json.dumps(route_prefixes))
+
+
+def _is_worker_guard_request(value: str) -> bool:
+    return any(key == "__cua_worker_guard" for key, _ in parse_qsl(urlsplit(value).query))
+
+
+def _websocket_policy_url(value: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"ws", "wss"}:
+        return value
+    return parsed._replace(
+        scheme="https" if parsed.scheme == "wss" else "http",
+        fragment="",
+    ).geturl()
 
 
 def _quote_css(value: str) -> str:

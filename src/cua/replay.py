@@ -114,6 +114,10 @@ class ReplayRunner:
             self._merge_operator_outputs(outputs)
             try:
                 observation = self.surface.observe()
+            except PolicyViolation as exc:
+                if self._try_handoff(step, exc):
+                    continue
+                return self._failure(step, "POLICY_BLOCKED", str(exc))
             except SurfaceError as exc:
                 if self._try_handoff(step, exc):
                     continue
@@ -157,6 +161,25 @@ class ReplayRunner:
         self._merge_operator_outputs(outputs)
         try:
             observation = self.surface.observe()
+        except PolicyViolation as exc:
+            if self._try_handoff(ActionStep("final-observation", ActionType.WAIT), exc):
+                self._merge_operator_outputs(outputs)
+                try:
+                    observation = self.surface.observe()
+                except PolicyViolation as second_exc:
+                    return self._failure(
+                        ActionStep("final-observation", ActionType.WAIT),
+                        "POLICY_BLOCKED",
+                        str(second_exc),
+                    )
+                except SurfaceError as second_exc:
+                    return self._surface_failure(ActionStep("final-observation", ActionType.WAIT), second_exc)
+            else:
+                return self._failure(
+                    ActionStep("final-observation", ActionType.WAIT),
+                    "POLICY_BLOCKED",
+                    str(exc),
+                )
         except SurfaceError as exc:
             if self._try_handoff(ActionStep("final-observation", ActionType.WAIT), exc):
                 self._merge_operator_outputs(outputs)
@@ -194,6 +217,8 @@ class ReplayRunner:
                 self._merge_operator_outputs(outputs)
                 try:
                     observation = self.surface.observe()
+                except PolicyViolation as exc:
+                    return self._failure(checkpoint_step, "POLICY_BLOCKED", str(exc))
                 except SurfaceError as exc:
                     return self._surface_failure(checkpoint_step, exc)
                 if self._business_outcome(observation) is not None:
@@ -243,6 +268,10 @@ class ReplayRunner:
             for attempt in range(self.max_retries + 1):
                 try:
                     extracted = self.surface.extract(step.target, step.timeout_ms)
+                    self.evidence.sensitive_values.add(str(extracted))
+                    set_sensitive_values = getattr(self.surface, "set_sensitive_values", None)
+                    if callable(set_sensitive_values):
+                        set_sensitive_values({str(extracted)})
                     outputs[step.value] = _coerce_output(
                         self.artifact.outputs[step.value].type,
                         extracted,
@@ -348,7 +377,7 @@ class ReplayRunner:
             return False
         try:
             observation = self.surface.observe()
-        except SurfaceError:
+        except (PolicyViolation, SurfaceError):
             observation = SurfaceObservation(self.surface.url, "", "", ())
         request = self.handoff.create_request(
             goal=f"replay capability {self.artifact.name}",

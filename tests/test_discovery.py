@@ -3,6 +3,8 @@ from dataclasses import replace
 import threading
 import time
 
+import pytest
+
 from cua.discovery import DiscoveryRunner, DiscoveryTemplate, _parameterize_text
 from cua.evidence import EvidenceRecorder
 from cua.handoff import HandoffCoordinator
@@ -291,7 +293,8 @@ def test_discovery_escalates_a_blocked_risky_action_to_human_control(tmp_path):
     assert artifact.steps[0].id == "human-search"
 
 
-def test_discovery_accepts_complete_human_work_at_the_step_budget_boundary(tmp_path):
+@pytest.mark.parametrize("model_marks_done", [False, True])
+def test_discovery_accepts_complete_human_work_at_the_step_budget_boundary(tmp_path, model_marks_done):
     surface = FakeSurface()
     policy = GuardrailPolicy.local_demo("http://127.0.0.1:8765")
     coordinator = HandoffCoordinator(surface, policy, EvidenceRecorder(tmp_path / "handoff"))
@@ -323,7 +326,7 @@ def test_discovery_accepts_complete_human_work_at_the_step_budget_boundary(tmp_p
     worker.start()
     result, artifact = DiscoveryRunner(
         surface,
-        ScriptedDecisionClient([AgentDecision(())]),
+        ScriptedDecisionClient([AgentDecision((), done=model_marks_done)]),
         policy,
         EvidenceRecorder(tmp_path / "discovery"),
         _template(),

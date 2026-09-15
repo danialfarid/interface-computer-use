@@ -105,8 +105,8 @@ class HandoffCoordinator:
             step=step,
             reason=reason,
             state=HandoffState.REQUESTED,
-            current_url=observation.url,
-            observation=observation.to_dict(),
+            current_url=self.evidence.redact_url(observation.url),
+            observation=self.evidence.redact_payload(observation.to_dict()),
             screenshot=str(screenshot) if screenshot is not None else None,
             snapshot=str(snapshot) if snapshot is not None else None,
         )
@@ -162,7 +162,12 @@ class HandoffCoordinator:
         if pending.error is not None:
             raise pending.error
 
-    def process_pending_actions(self) -> int:
+    def process_pending_actions(
+        self,
+        *,
+        intervention_id: str | None = None,
+        expires_at: float | None = None,
+    ) -> int:
         """Apply queued HTTP actions on the thread that owns the live browser."""
 
         if threading.get_ident() != self._owner_thread_id:
@@ -172,6 +177,13 @@ class HandoffCoordinator:
             self._pending_actions.clear()
         for item in pending:
             try:
+                if (
+                    intervention_id == item.intervention_id
+                    and expires_at is not None
+                    and time.monotonic() >= expires_at
+                ):
+                    self._expire_request(item.intervention_id)
+                    raise SurfaceError("intervention expired before the action was applied")
                 self._apply_human_action(item)
             except Exception as exc:  # communicate the structured error to the API caller
                 item.error = exc
@@ -190,6 +202,10 @@ class HandoffCoordinator:
             if pending.step.target is None:
                 raise SurfaceError("human extract requires a target")
             extracted = self.surface.extract(pending.step.target, pending.step.timeout_ms)
+            self.evidence.sensitive_values.add(extracted)
+            set_sensitive_values = getattr(self.surface, "set_sensitive_values", None)
+            if callable(set_sensitive_values):
+                set_sensitive_values({extracted})
         else:
             self.surface.perform(
                 pending.step.action,
@@ -198,20 +214,26 @@ class HandoffCoordinator:
                 pending.step.timeout_ms,
             )
         self.policy.check_url(self.surface.url)
-        request.current_url = self.surface.url
+        request.current_url = self.evidence.redact_url(self.surface.url)
         try:
-            request.observation = self.surface.observe().to_dict()
+            request.observation = self.evidence.redact_payload(self.surface.observe().to_dict())
         except SurfaceError as exc:
-            request.observation = {
+            request.observation = self.evidence.redact_payload({
                 "url": request.current_url,
                 "title": "",
                 "text": "",
                 "controls": [],
                 "readable_targets": [],
                 "observation_error": str(exc),
-            }
+            })
         action = pending.step.to_dict()
-        request.human_actions.append(action)
+        redacted_action = {
+            "id": action.get("id"),
+            **self.evidence.redact_payload({key: value for key, value in action.items() if key != "id"}),
+        }
+        if pending.step.action.value in {"fill", "navigate"} and "value" in redacted_action:
+            redacted_action["value"] = "<REDACTED>"
+        request.human_actions.append(redacted_action)
         self.evidence.event(
             "human_action",
             intervention_id=pending.intervention_id,
@@ -237,22 +259,38 @@ class HandoffCoordinator:
     def wait_for_resume(self, intervention_id: str, timeout_s: float = 300.0) -> bool:
         expires_at = time.monotonic() + timeout_s
         while True:
-            self.process_pending_actions()
+            self.process_pending_actions(intervention_id=intervention_id, expires_at=expires_at)
             with self._condition:
                 request = self._requests[intervention_id]
                 if request.state in {HandoffState.RESUMED, HandoffState.CLOSED}:
                     return request.state == HandoffState.RESUMED
                 remaining = expires_at - time.monotonic()
                 if remaining <= 0:
-                    request.state = HandoffState.CLOSED
-                    self._condition.notify_all()
-                    self.evidence.event(
-                        "intervention_expired",
-                        intervention_id=intervention_id,
-                        operator=request.operator,
-                    )
-                    return False
+                    self._expire_request(intervention_id)
+                    with self._condition:
+                        return self._requests[intervention_id].state == HandoffState.RESUMED
                 self._condition.wait(timeout=min(0.1, remaining))
+
+    def _expire_request(self, intervention_id: str) -> None:
+        pending: list[_PendingHumanAction] = []
+        with self._condition:
+            request = self._requests[intervention_id]
+            if request.state != HandoffState.HUMAN_CONTROL:
+                return
+            request.state = HandoffState.CLOSED
+            operator = request.operator
+            retained: list[_PendingHumanAction] = []
+            for item in self._pending_actions:
+                if item.intervention_id == intervention_id:
+                    pending.append(item)
+                else:
+                    retained.append(item)
+            self._pending_actions = retained
+            self._condition.notify_all()
+        for item in pending:
+            item.error = SurfaceError("intervention expired before the action was applied")
+            item.done.set()
+        self.evidence.event("intervention_expired", intervention_id=intervention_id, operator=operator)
 
 
 class HandoffServer:

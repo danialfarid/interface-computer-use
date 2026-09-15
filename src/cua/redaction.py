@@ -11,11 +11,12 @@ _SECRET_PATTERNS = (
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._-]+"),
 )
 _SENSITIVE_FIELDS = re.compile(
-    r"(?i)^(?:api[_-]?key|authorization|account(?:[_-]?number)?|balance|current[_-]?savings[_-]?balance|email|member[_-]?id|name|password|phone|secret|ssn|token)$"
+    r"(?i)^(?:api[_-]?key|authorization|account(?:[_-]?number)?|address|balance|current[_-]?savings[_-]?balance|email|member[_-]?id|name|password|phone|secret|ssn|token)$"
 )
 _PII_PATTERNS = (
     re.compile(r"(?i)\b(?:demo|synthetic)[_-]?(?:member|user)[_-]?\d+\b"),
     re.compile(r"\b\d{4,}\b"),
+    re.compile(r"\b\d+\b"),
     re.compile(r"\$\s?[\d,]+(?:\.\d{2})?"),
     re.compile(r"\b\d[\d,]*\.\d{2}\b"),
     re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"),
@@ -45,6 +46,8 @@ def redact_value(name: str, value: Any) -> Any:
     if _SENSITIVE_FIELDS.match(name):
         return "<REDACTED>"
     if isinstance(value, str):
+        if name.lower() in {"url", "current_url", "origin"} and "://" in value:
+            return redact_url(value)
         return redact_text(value)
     if isinstance(value, dict):
         return {str(key): redact_value(str(key), item) for key, item in value.items()}

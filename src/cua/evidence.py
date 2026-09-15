@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 import uuid
 
-from .redaction import redact_artifact_payload, redact_value
+from .redaction import redact_artifact_payload, redact_url, redact_value
 
 
 def _redact_sensitive_names(value: Any, names: set[str]) -> Any:
@@ -69,9 +69,18 @@ class EvidenceRecorder:
         with self.log_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
 
+    def redact_payload(self, payload: Any) -> Any:
+        return _redact_sensitive_values(
+            _redact_sensitive_names(redact_value("payload", payload), self.sensitive_names),
+            self.sensitive_values,
+        )
+
+    def redact_url(self, value: str) -> str:
+        return _redact_sensitive_values(redact_url(value), self.sensitive_values)
+
     def json_file(self, name: str, payload: Any) -> Path:
         path = self.directory / name
-        path.write_text(json.dumps(redact_value(name, payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(self.redact_payload(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return path
 
     def artifact_file(self, artifact: Any) -> Path:

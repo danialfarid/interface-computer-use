@@ -100,6 +100,7 @@ def runtime_page(state: str) -> bytes:
             <button id="js-nav" onclick="location.href='/admin'">Script navigation</button>
             <button id="fetch-nav" onclick="fetch('/admin?member=1001')">Script fetch</button>
             <button id="ws-nav" onclick="new WebSocket('ws://' + location.host + '/admin?member=1001')">WebSocket navigation</button>
+            <button id="worker-ws-nav" onclick="new Worker('/runtime/worker.js')">Worker WebSocket navigation</button>
             <form method="get" action="/member">
               <button id="form-nav" type="submit" formaction="/admin">Form override</button>
             </form>
@@ -124,6 +125,16 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
             payload = member_page(member_id)
             status = 200
         elif parsed.path.startswith("/runtime/"):
+            if parsed.path == "/runtime/worker.js":
+                payload = (
+                    "new WebSocket('ws://' + self.location.host + '/admin?member=1001');".encode()
+                )
+                self.send_response(200)
+                self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
             if parsed.path == "/runtime/redirect":
                 self.send_response(302)
                 self.send_header("Location", "/admin")

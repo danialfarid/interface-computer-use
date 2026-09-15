@@ -22,6 +22,28 @@ def test_redaction_handles_bearer_and_key_formats_without_crashing():
     assert "<REDACTED>" in redacted
 
 
+def test_redaction_masks_unlabeled_numeric_values_in_observation_text():
+    redacted = redact_text("Current savings balance 85")
+
+    assert "85" not in redacted
+    assert "<REDACTED>" in redacted
+
+
+def test_evidence_redacts_sensitive_observation_payloads(tmp_path):
+    evidence = EvidenceRecorder(tmp_path)
+    evidence.event(
+        "observation",
+        observation={
+            "url": "http://127.0.0.1:8765/member",
+            "text": "Current savings balance 85",
+            "readable_targets": [{"text": "85"}],
+        },
+    )
+
+    record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
+    assert "85" not in json.dumps(record["payload"])
+
+
 def test_redaction_masks_named_sensitive_scalar_values_including_numbers():
     value = {
         "member_id": 1001,
