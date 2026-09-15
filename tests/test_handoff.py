@@ -1,6 +1,8 @@
 from pathlib import Path
 from urllib.request import Request, urlopen
 import json
+import threading
+import time
 
 from cua.evidence import EvidenceRecorder
 from cua.handoff import HandoffCoordinator, HandoffServer, HandoffState
@@ -88,3 +90,69 @@ def test_local_operator_api_transfers_and_resumes(tmp_path):
         assert result["state"] == HandoffState.RESUMED
     finally:
         server.close()
+
+
+def test_operator_api_action_is_applied_by_browser_owner_thread(tmp_path):
+    surface = FakeSurface()
+    coordinator = HandoffCoordinator(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+    )
+    request = coordinator.create_request(
+        goal="goal", capability_id="cap", step="step", reason="stuck", observation=surface.observe()
+    )
+    coordinator.take_control(request.intervention_id, "reviewer")
+    server = HandoffServer(coordinator)
+    server.start()
+    try:
+        action_request = Request(
+            server.url + f"/interventions/{request.intervention_id}/action",
+            data=json.dumps(
+                {
+                    "action": {
+                        "id": "human-search",
+                        "action": "click",
+                        "target": {"strategy": "role", "value": "button:Search"},
+                    }
+                }
+            ).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        response_body: list[dict] = []
+
+        def call_api():
+            with urlopen(action_request) as response:
+                response_body.append(json.loads(response.read()))
+
+        worker = threading.Thread(target=call_api)
+        worker.start()
+        while worker.is_alive():
+            coordinator.process_pending_actions()
+            time.sleep(0.01)
+        worker.join()
+
+        assert response_body[0]["human_actions"][0]["id"] == "human-search"
+        assert surface.actions[0][0] is ActionType.CLICK
+    finally:
+        server.close()
+
+
+def test_human_action_callback_can_extend_the_discovery_artifact(tmp_path):
+    surface = FakeSurface()
+    coordinator = HandoffCoordinator(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+    )
+    recorded = []
+    coordinator.on_human_action = recorded.append
+    request = coordinator.create_request(
+        goal="goal", capability_id="cap", step="step", reason="stuck", observation=surface.observe()
+    )
+    coordinator.take_control(request.intervention_id, "reviewer")
+    step = ActionStep("human-search", ActionType.CLICK, Locator("role", "button:Search"))
+    coordinator.record_human_action(request.intervention_id, step)
+
+    assert recorded == [step]

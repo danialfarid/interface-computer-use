@@ -54,3 +54,25 @@ class GuardrailPolicy:
             allowed_route_prefixes=("/", "/member"),
             risky_actions=frozenset(),
         )
+
+
+def check_action_destination(policy: GuardrailPolicy, surface: object, step: ActionStep) -> None:
+    """Check a known destination before an action can cause navigation.
+
+    A post-action URL check remains necessary because a page can navigate through
+    script, but checking links/forms first prevents a forbidden click from being
+    performed in the first place.
+    """
+
+    if step.action is ActionType.NAVIGATE:
+        if step.value is None:
+            return
+        policy.check_url(step.value)
+        return
+    if step.action is not ActionType.CLICK or step.target is None:
+        return
+    preview = getattr(surface, "preview_url", None)
+    if callable(preview):
+        destination = preview(step.target, step.timeout_ms)
+        if destination:
+            policy.check_url(destination)

@@ -4,12 +4,13 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import threading
-from typing import Any
+import time
+from typing import Any, Callable
 import uuid
 
 from .evidence import EvidenceRecorder
-from .models import ActionStep, ActionType, Locator
-from .policy import ConfirmationRequired, GuardrailPolicy, PolicyViolation
+from .models import ActionStep, ActionType, Locator, RiskClass
+from .policy import ConfirmationRequired, GuardrailPolicy, PolicyViolation, check_action_destination
 from .surface import SurfaceError, SurfaceObservation
 
 
@@ -54,6 +55,15 @@ class InterventionRequest:
         }
 
 
+@dataclass
+class _PendingHumanAction:
+    intervention_id: str
+    step: ActionStep
+    confirmed: bool
+    done: threading.Event = field(default_factory=threading.Event)
+    error: Exception | None = None
+
+
 class HandoffCoordinator:
     """Transfers ownership while keeping automation and the operator on one surface."""
 
@@ -63,6 +73,9 @@ class HandoffCoordinator:
         self.evidence = evidence
         self._requests: dict[str, InterventionRequest] = {}
         self._condition = threading.Condition()
+        self._owner_thread_id = threading.get_ident()
+        self._pending_actions: list[_PendingHumanAction] = []
+        self.on_human_action: Callable[[ActionStep], None] | None = None
 
     def create_request(
         self,
@@ -122,20 +135,63 @@ class HandoffCoordinator:
         *,
         confirmed: bool = False,
     ) -> None:
-        request = self.get(intervention_id)
+        pending = _PendingHumanAction(intervention_id, step, confirmed)
+        if threading.get_ident() == self._owner_thread_id:
+            self._apply_human_action(pending)
+            if pending.error is not None:
+                raise pending.error
+            return
+        with self._condition:
+            request = self.get(intervention_id)
+            if request.state != HandoffState.HUMAN_CONTROL:
+                raise RuntimeError("human must hold control before acting")
+            self._pending_actions.append(pending)
+            self._condition.notify_all()
+        if not pending.done.wait(timeout=30.0):
+            raise SurfaceError("timed out waiting for the browser owner to apply the human action")
+        if pending.error is not None:
+            raise pending.error
+
+    def process_pending_actions(self) -> int:
+        """Apply queued HTTP actions on the thread that owns the live browser."""
+
+        if threading.get_ident() != self._owner_thread_id:
+            raise RuntimeError("browser actions must be processed by the coordinator owner")
+        with self._condition:
+            pending = list(self._pending_actions)
+            self._pending_actions.clear()
+        for item in pending:
+            try:
+                self._apply_human_action(item)
+            except Exception as exc:  # communicate the structured error to the API caller
+                item.error = exc
+            finally:
+                item.done.set()
+        return len(pending)
+
+    def _apply_human_action(self, pending: _PendingHumanAction) -> None:
+        request = self.get(pending.intervention_id)
         if request.state != HandoffState.HUMAN_CONTROL:
             raise RuntimeError("human must hold control before acting")
-        self.policy.check_step(step, confirmed=confirmed)
-        self.surface.perform(step.action, step.target, step.value, step.timeout_ms)
+        self.policy.check_step(pending.step, confirmed=pending.confirmed)
+        check_action_destination(self.policy, self.surface, pending.step)
+        self.surface.perform(
+            pending.step.action,
+            pending.step.target,
+            pending.step.value,
+            pending.step.timeout_ms,
+        )
         self.policy.check_url(self.surface.url)
-        action = step.to_dict()
+        action = pending.step.to_dict()
         request.human_actions.append(action)
         self.evidence.event(
             "human_action",
-            intervention_id=intervention_id,
+            intervention_id=pending.intervention_id,
             operator=request.operator,
             step=action,
         )
+        if self.on_human_action is not None:
+            self.on_human_action(pending.step)
 
     def resume(self, intervention_id: str) -> InterventionRequest:
         with self._condition:
@@ -148,12 +204,17 @@ class HandoffCoordinator:
         return request
 
     def wait_for_resume(self, intervention_id: str, timeout_s: float = 300.0) -> bool:
-        with self._condition:
-            resumed = self._condition.wait_for(
-                lambda: self._requests[intervention_id].state in {HandoffState.RESUMED, HandoffState.CLOSED},
-                timeout=timeout_s,
-            )
-            return resumed and self._requests[intervention_id].state == HandoffState.RESUMED
+        expires_at = time.monotonic() + timeout_s
+        while True:
+            self.process_pending_actions()
+            with self._condition:
+                request = self._requests[intervention_id]
+                if request.state in {HandoffState.RESUMED, HandoffState.CLOSED}:
+                    return request.state == HandoffState.RESUMED
+                remaining = expires_at - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(timeout=min(0.1, remaining))
 
 
 class HandoffServer:
@@ -205,6 +266,9 @@ class HandoffServer:
                             action=ActionType(str(action["action"])),
                             target=Locator.from_dict(action["target"]) if action.get("target") else None,
                             value=str(action["value"]) if action.get("value") is not None else None,
+                            risk=RiskClass(str(action.get("risk", RiskClass.SAFE.value))),
+                            timeout_ms=int(action.get("timeout_ms", 5_000)),
+                            description=str(action.get("description", "")),
                         )
                         coordinator.record_human_action(
                             intervention_id,

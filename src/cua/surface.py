@@ -83,6 +83,8 @@ class BrowserSurface:
         self._browser = browser
         self._context = context
         self.page = page
+        self._unexpected_dialog: str | None = None
+        self.page.on("dialog", self._handle_dialog)
 
     @classmethod
     def open(cls, url: str, *, headless: bool = True) -> "BrowserSurface":
@@ -116,12 +118,31 @@ class BrowserSurface:
     def observe(self) -> SurfaceObservation:
         try:
             text = str(self.page.locator("body").inner_text())
+            self._raise_pending_dialog("observe")
+            if "application error" in text.lower():
+                raise SurfaceAppError("the page reported an application error")
             title = str(self.page.title())
             controls = tuple(self._controls())
             readable_targets = tuple(self._readable_targets())
             return SurfaceObservation(self.url, title, text, controls, readable_targets)
+        except SurfaceError:
+            raise
         except Exception as exc:
             raise SurfaceError(f"observe failed: {exc}") from exc
+
+    def _handle_dialog(self, dialog: Any) -> None:
+        self._unexpected_dialog = str(getattr(dialog, "message", "browser dialog"))
+        try:
+            dialog.dismiss()
+        except Exception:
+            return
+
+    def _raise_pending_dialog(self, action: str) -> None:
+        if self._unexpected_dialog is None:
+            return
+        message = self._unexpected_dialog
+        self._unexpected_dialog = None
+        raise UnexpectedDialog(f"{action} encountered an unexpected browser dialog: {message}")
 
     def _controls(self) -> list[Control]:
         handles = self.page.locator("a,button,input,select,textarea,[role]")
@@ -248,6 +269,26 @@ class BrowserSurface:
             raise SurfaceError(f"could not resolve locator {locator}: {exc}") from exc
         raise SurfaceError(f"unsupported locator strategy: {locator.strategy}")
 
+    def preview_url(self, locator: Locator, timeout_ms: int = 5_000) -> str | None:
+        """Return a static link/form destination before a click is performed."""
+
+        try:
+            handle = self.resolve(locator, timeout_ms).first
+            destination = handle.evaluate(
+                """(el) => {
+                  const anchor = el.closest('a');
+                  if (anchor && anchor.href) return anchor.href;
+                  const form = el.closest('form') || el.form;
+                  if (form) return new URL(form.getAttribute('action') || location.href, location.href).href;
+                  return null;
+                }"""
+            )
+            return str(destination) if destination else None
+        except Exception as exc:
+            if "Timeout" in type(exc).__name__:
+                raise SurfaceTimeout(f"could not inspect click destination before timeout: {exc}") from exc
+            raise SurfaceError(f"could not inspect click destination: {exc}") from exc
+
     def perform(self, action: ActionType, locator: Locator | None = None, value: str | None = None, timeout_ms: int = 5_000) -> None:
         try:
             if action is ActionType.NAVIGATE:
@@ -271,6 +312,7 @@ class BrowserSurface:
                 self.page.wait_for_timeout(int(value or "250"))
             else:
                 raise SurfaceError(f"unsupported interactive action: {action.value}")
+            self._raise_pending_dialog(action.value)
         except SurfaceError:
             raise
         except Exception as exc:
