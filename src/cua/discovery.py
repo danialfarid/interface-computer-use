@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Protocol
 
 from .evidence import EvidenceRecorder
@@ -304,6 +305,10 @@ def _safe_description(value: str, parameter_values: dict[str, str]) -> str:
 
 def _parameterize_text(value: str, parameter_values: dict[str, str]) -> str:
     result = value
-    for name, actual in parameter_values.items():
-        result = result.replace(actual, "{{" + name + "}}")
+    for name, actual in sorted(parameter_values.items(), key=lambda item: len(item[1]), reverse=True):
+        replacement = "{{" + name + "}}"
+        if actual.isdigit():
+            result = re.sub(rf"(?<!\d){re.escape(actual)}(?!\d)", replacement, result)
+        else:
+            result = result.replace(actual, replacement)
     return result

@@ -41,7 +41,7 @@ Run a live discovery goal. The command prints the evidence directory and the sav
 PYTHONPATH=src .venv/bin/python -m cua.cli discover \
   --member-id 1001 \
   --goal 'look up member 1001 and read the current savings balance' \
-  --evidence-dir evidence/live-discovery
+  --evidence-dir evidence/live-discovery-2
 ```
 
 Replay the resulting artifact. This command does not construct or call an LLM client.
@@ -84,5 +84,6 @@ The printed endpoint supports `GET /interventions`, then `POST /interventions/{i
 - `src/cua/handoff.py` - pause, ownership transfer, same-session operator actions, and resume.
 - `src/cua/policy.py` and `src/cua/redaction.py` - allowlist, risk confirmation, and persistence-boundary safety.
 - `src/cua/demo_app.py` - local synthetic target with search, detail, and not-found states.
+- `schemas/capability.schema.json` - reviewable JSON Schema for the saved artifact.
 - `REPORT.md` - design decisions, trade-offs, heterogeneity story, safety model, and cuts.
 - `evidence/` - redacted run evidence and saved artifacts.

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from cua.discovery import DiscoveryRunner, DiscoveryTemplate
+from cua.discovery import DiscoveryRunner, DiscoveryTemplate, _parameterize_text
 from cua.evidence import EvidenceRecorder
 from cua.llm import AgentAction, AgentDecision, ScriptedDecisionClient
 from cua.models import (
@@ -193,3 +193,8 @@ def test_discovery_maps_model_output_name_to_single_declared_output(tmp_path):
     assert artifact is not None
     assert set(artifact.outputs) == {"balance"}
     assert "1001" not in artifact.to_json()
+
+
+def test_parameterization_does_not_replace_short_numeric_ids_inside_other_values():
+    assert _parameterize_text("/member?member=1001", {"member_id": "1001"}) == "/member?member={{member_id}}"
+    assert _parameterize_text("/member?member=1001", {"member_id": "10"}) == "/member?member=1001"
