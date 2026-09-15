@@ -149,6 +149,7 @@ class ReplayRunner:
         for attempt in range(self.max_retries + 1):
             try:
                 self.surface.perform(step.action, step.target, value, step.timeout_ms)
+                self.policy.check_url(self.surface.url)
                 self.evidence.event("action", step=step.to_dict(), attempt=attempt + 1)
                 return
             except SurfaceTimeout as exc:

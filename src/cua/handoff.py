@@ -129,6 +129,7 @@ class HandoffCoordinator:
             raise RuntimeError("human must hold control before acting")
         self.policy.check_step(step, confirmed=confirmed)
         self.surface.perform(step.action, step.target, step.value, step.timeout_ms)
+        self.policy.check_url(self.surface.url)
         action = step.to_dict()
         request.human_actions.append(action)
         self.evidence.event(

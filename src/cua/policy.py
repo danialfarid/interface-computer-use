@@ -29,9 +29,12 @@ class GuardrailPolicy:
         origin = f"{parsed.scheme}://{parsed.netloc}"
         if origin not in self.allowed_origins:
             raise PolicyViolation(f"origin is not allowlisted: {origin}")
-        if self.allowed_route_prefixes and not any(
-            parsed.path.startswith(prefix) for prefix in self.allowed_route_prefixes
-        ):
+        def matches(prefix: str) -> bool:
+            if prefix == "/":
+                return parsed.path == "/"
+            return parsed.path == prefix or parsed.path.startswith(prefix.rstrip("/") + "/")
+
+        if self.allowed_route_prefixes and not any(matches(prefix) for prefix in self.allowed_route_prefixes):
             raise PolicyViolation(f"route is not allowlisted: {parsed.path}")
 
     def check_step(self, step: ActionStep, *, confirmed: bool = False) -> None:
@@ -48,6 +51,6 @@ class GuardrailPolicy:
     def local_demo(cls, origin: str) -> "GuardrailPolicy":
         return cls(
             allowed_origins=(origin,),
-            allowed_route_prefixes=("/",),
+            allowed_route_prefixes=("/", "/member"),
             risky_actions=frozenset(),
         )

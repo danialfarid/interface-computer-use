@@ -228,6 +228,7 @@ class DiscoveryRunner:
         )
         self.policy.check_step(step, confirmed=self.confirmed_risky)
         self.surface.perform(action.action, locator, action.value, step.timeout_ms)
+        self.policy.check_url(self.surface.url)
         self.recorded_steps.append(step)
         self.evidence.event("action", step=step.to_dict(), reason=action.reason)
 
