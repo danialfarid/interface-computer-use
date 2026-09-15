@@ -12,7 +12,7 @@ from .demo_app import serve
 from .discovery import DiscoveryRunner
 from .evidence import EvidenceRecorder
 from .handoff import HandoffCoordinator, HandoffServer
-from .llm import OpenAICompatibleClient
+from .llm import LLMError, OpenAICompatibleClient
 from .models import CapabilityArtifact, RunStatus
 from .policy import GuardrailPolicy
 from .replay import ReplayRunner
@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
             return _run_discover(args)
         if args.command == "replay":
             return _run_replay(args)
-    except (OSError, SurfaceError) as exc:
+    except (LLMError, OSError, SurfaceError, ValueError) as exc:
         print(json.dumps({"status": "hard_failure", "error": str(exc)}), file=sys.stderr)
         return 1
     return 2
