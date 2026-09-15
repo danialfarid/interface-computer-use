@@ -48,7 +48,7 @@ Replay the resulting artifact. This command does not construct or call an LLM cl
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m cua.cli replay \
-  --artifact evidence/live-discovery/<run-id>/artifact.json \
+  --artifact evidence/live-discovery-2/<run-id>/artifact.json \
   --input member_id=1001 \
   --evidence-dir evidence/live-replay
 ```
@@ -74,6 +74,16 @@ PYTHONPATH=src .venv/bin/python -m cua.cli discover \
 ```
 
 The printed endpoint supports `GET /interventions`, then `POST /interventions/{id}/take-control`, `POST /interventions/{id}/action`, and `POST /interventions/{id}/resume`. Actions go through the same live browser surface and guardrail policy. The localhost API is intentionally minimal and is not an internet-facing operator console.
+
+Replay can expose the same handoff boundary when a fixed step is blocked or the surface fails:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m cua.cli replay \
+  --artifact evidence/live-discovery-2/<run-id>/artifact.json \
+  --input member_id=1001 --handoff --handoff-wait 300
+```
+
+After taking control, the operator must complete or repair the blocked step in the same browser session before resuming.
 
 ## Project layout
 

@@ -47,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     replay.add_argument("--artifact", type=Path, required=True)
     replay.add_argument("--input", action="append", default=[], metavar="NAME=VALUE")
     replay.add_argument("--evidence-dir", type=Path, default=Path("evidence"))
+    replay.add_argument("--handoff", action="store_true", help="start the localhost operator handoff API")
+    replay.add_argument("--handoff-wait", type=float, default=300.0)
     replay.add_argument("--headed", action="store_true")
 
     args = parser.parse_args(argv)
@@ -133,17 +135,27 @@ def _run_replay(args: argparse.Namespace) -> int:
     demo_server = _ensure_demo_server(target_url)
     browser = BrowserSurface.open(target_url, headless=not args.headed)
     evidence = EvidenceRecorder(args.evidence_dir)
+    handoff_server = None
     try:
+        coordinator = HandoffCoordinator(browser, policy, evidence) if args.handoff else None
+        if coordinator is not None:
+            handoff_server = HandoffServer(coordinator)
+            handoff_server.start()
+            print(f"operator handoff: {handoff_server.url}/interventions", flush=True)
         result = ReplayRunner(
             browser,
             policy,
             evidence,
             artifact,
             inputs=_parse_inputs(args.input),
+            handoff=coordinator,
+            handoff_wait_s=args.handoff_wait,
         ).run()
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
         return 0 if result.status in {RunStatus.SUCCESS, RunStatus.BUSINESS_OUTCOME} else 1
     finally:
+        if handoff_server is not None:
+            handoff_server.close()
         browser.close()
         if demo_server is not None:
             demo_server.shutdown()

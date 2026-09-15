@@ -68,6 +68,36 @@ def member_page(member_id: str) -> bytes:
     )
 
 
+def runtime_page(state: str) -> bytes:
+    pages = {
+        "validation": (
+            "Validation error",
+            "<div class=\"notice\"><h2>Validation error</h2><p>Member ID is invalid.</p></div>",
+        ),
+        "permission-denied": (
+            "Permission denied",
+            "<div class=\"notice\"><h2>Permission denied</h2><p>This operator cannot view the record.</p></div>",
+        ),
+        "session-expired": (
+            "Session expired",
+            "<div class=\"notice\"><h2>Session expired</h2><p>Please sign in again.</p></div>",
+        ),
+        "app-error": (
+            "Application error",
+            "<div class=\"notice\"><h2>Application error</h2><p>The portal failed to render this page.</p></div>",
+        ),
+        "confirmation": (
+            "Unexpected confirmation",
+            """
+            <p>Confirmation fixture for the browser adapter.</p>
+            <button id="confirm-action" onclick="confirm('Confirm this action?')">Continue</button>
+            """,
+        ),
+    }
+    title, body = pages.get(state, ("Not found", "<h2>Not found</h2>"))
+    return _page(title, body)
+
+
 class DemoRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         parsed = urlparse(self.path)
@@ -78,6 +108,9 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
             member_id = parse_qs(parsed.query).get("member", [""])[0]
             payload = member_page(member_id)
             status = 200
+        elif parsed.path.startswith("/runtime/"):
+            payload = runtime_page(parsed.path.removeprefix("/runtime/"))
+            status = 200 if "Not found" not in payload.decode() else 404
         else:
             payload = _page("Not found", "<h2>Not found</h2>")
             status = 404

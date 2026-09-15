@@ -51,7 +51,7 @@ class GuardrailPolicy:
     def local_demo(cls, origin: str) -> "GuardrailPolicy":
         return cls(
             allowed_origins=(origin,),
-            allowed_route_prefixes=("/", "/member"),
+            allowed_route_prefixes=("/", "/member", "/runtime"),
             risky_actions=frozenset(),
         )
 
