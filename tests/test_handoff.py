@@ -1,4 +1,5 @@
 from pathlib import Path
+from dataclasses import replace
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import json
@@ -58,7 +59,7 @@ def test_human_action_uses_same_surface_and_returns_control(tmp_path):
 
     assert surface.actions[0][0] is ActionType.CLICK
     assert coordinator.get(request.intervention_id).state == HandoffState.RESUMED
-    assert coordinator.get(request.intervention_id).human_actions[0]["id"] == "human-1"
+    assert coordinator.get(request.intervention_id).human_actions[0]["id"] == "human-action-1"
 
 
 def test_human_confirmation_requires_a_boolean(tmp_path):
@@ -181,7 +182,7 @@ def test_operator_api_action_is_applied_by_browser_owner_thread(tmp_path):
             time.sleep(0.01)
         worker.join()
 
-        assert response_body[0]["human_actions"][0]["id"] == "human-search"
+        assert response_body[0]["human_actions"][0]["id"] == "human-action-1"
         assert response_body[0]["current_url"].endswith("/member")
         assert response_body[0]["observation"]["title"] == "<REDACTED>"
         assert surface.actions[0][0] is ActionType.CLICK
@@ -205,7 +206,7 @@ def test_human_action_callback_can_extend_the_discovery_artifact(tmp_path):
     step = ActionStep("human-search", ActionType.CLICK, Locator("role", "button:Search"))
     coordinator.record_human_action(request.intervention_id, step)
 
-    assert recorded == [step]
+    assert recorded == [replace(step, id="human-action-1")]
 
 
 def test_expired_handoff_closes_control_and_rejects_late_actions(tmp_path):

@@ -263,16 +263,33 @@ class CapabilityArtifact:
             raise ValueError("artifact_version must be at least 1")
         if not self.capability_id or not self.name:
             raise ValueError("capability_id and name are required")
+        _validate_safe_metadata(self.capability_id, "capability_id")
+        _validate_safe_metadata(self.surface_kind, "surface_kind")
         if not self.target.get("url") or not self.target.get("origin"):
             raise ValueError("target must include url and origin")
+        for target_name, target_value in self.target.items():
+            _validate_safe_metadata(target_name, "target field name")
+            if target_name not in {"url", "origin"}:
+                _validate_safe_metadata(target_value, f"target {target_name}")
         if not self.checkpoint.value or not self.checkpoint.description:
             raise ValueError("checkpoint value and description are required")
+        for field_name, field_value in (
+            ("name", self.name),
+            ("description", self.description),
+            ("checkpoint value", self.checkpoint.value),
+            ("checkpoint description", self.checkpoint.description),
+        ):
+            _validate_safe_metadata(field_value, field_name)
         for name, spec in self.parameters.items():
+            _validate_safe_metadata(name, "parameter name")
             if spec.type not in {"string", "integer"}:
                 raise ValueError(f"unsupported parameter type for {name}: {spec.type}")
+            _validate_safe_metadata(spec.description, f"parameter {name} description")
         for name, spec in self.outputs.items():
+            _validate_safe_metadata(name, "output name")
             if spec.type not in {"string", "integer"}:
                 raise ValueError(f"unsupported output type for {name}: {spec.type}")
+            _validate_safe_metadata(spec.description, f"output {name} description")
             if spec.source.strategy == "text":
                 raise ValueError(f"output source for {name} cannot use a text locator")
             _validate_locator_persistence(spec.source, f"output {name}")
@@ -282,6 +299,8 @@ class CapabilityArtifact:
         for step in self.steps:
             if not step.id or step.timeout_ms < 1:
                 raise ValueError(f"step {step.id!r} must have a positive timeout")
+            _validate_safe_metadata(step.id, f"step {step.id} id")
+            _validate_safe_metadata(step.description, f"step {step.id} description")
             if step.target is not None:
                 if step.target.strategy == "text":
                     raise ValueError(f"step {step.id} cannot persist a text locator")
@@ -301,6 +320,8 @@ class CapabilityArtifact:
                 for item in (outcome.code, outcome.description, outcome.detection_text)
             ):
                 raise ValueError("business outcomes require non-empty string fields")
+            _validate_safe_metadata(outcome.description, f"business outcome {outcome.code} description")
+            _validate_safe_metadata(outcome.detection_text, f"business outcome {outcome.code} detection text")
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "CapabilityArtifact":
@@ -399,6 +420,7 @@ class CapabilityArtifact:
 def _validate_locator_persistence(locator: Locator, owner: str) -> None:
     if locator.strategy not in Locator.SUPPORTED_STRATEGIES:
         raise ValueError(f"{owner} has an unsupported locator strategy: {locator.strategy}")
+    _validate_safe_metadata(locator.rationale, f"{owner} rationale")
     if (
         locator.strategy == "css"
         and "href=" in locator.value
@@ -416,6 +438,11 @@ def _validate_locator_persistence(locator: Locator, owner: str) -> None:
         raise ValueError(f"{owner} locator appears to contain sensitive text")
     for fallback in locator.fallback:
         _validate_locator_persistence(fallback, owner)
+
+
+def _validate_safe_metadata(value: str, owner: str) -> None:
+    if any(ord(character) > 127 for character in value):
+        raise ValueError(f"{owner} contains unsafe free-form text")
 
 
 class RunStatus(StrEnum):

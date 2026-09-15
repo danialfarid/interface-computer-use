@@ -93,6 +93,12 @@ class DiscoveryRunner:
             name for name, spec in self.template.output_descriptions.items() if spec[2]
         )
         self.evidence.sensitive_values.update(self.parameter_values.values())
+        set_client_sensitive_values = getattr(self.client, "set_sensitive_values", None)
+        if callable(set_client_sensitive_values):
+            set_client_sensitive_values(set(self.parameter_values.values()))
+        set_client_parameter_values = getattr(self.client, "set_parameter_values", None)
+        if callable(set_client_parameter_values):
+            set_client_parameter_values(dict(self.parameter_values))
         set_sensitive_values = getattr(self.surface, "set_sensitive_values", None)
         if callable(set_sensitive_values):
             set_sensitive_values(set(self.parameter_values.values()))
@@ -147,9 +153,21 @@ class DiscoveryRunner:
                     )
                     self.evidence.event("run_finished", result=result.to_dict())
                     return result, None
+                ready = self._complete_if_ready(observation, f"decision-{step_number}")
+                if ready is not None:
+                    return ready
                 try:
+                    set_client_completed_outputs = getattr(self.client, "set_completed_outputs", None)
+                    if callable(set_client_completed_outputs):
+                        set_client_completed_outputs(set(self.output_sources))
                     decision = self.client.decide(goal, observation)
-                    self.evidence.event("decision", step=step_number, decision=decision.to_dict())
+                    provenance = getattr(self.client, "provenance", lambda: {})()
+                    self.evidence.event(
+                        "decision",
+                        step=step_number,
+                        decision=decision.to_dict(),
+                        **provenance,
+                    )
                     for action_number, action in enumerate(decision.actions, start=1):
                         self._execute_action(step_number, action_number, action, observation)
                 except LLMError as exc:
@@ -341,16 +359,27 @@ class DiscoveryRunner:
         observation: SurfaceObservation,
     ) -> None:
         locator: Locator | None = None
-        if action.control_id:
-            control = next((item for item in observation.controls if item.ephemeral_id == action.control_id), None)
-            if control is None:
-                raise SurfaceError(f"unknown control id: {action.control_id}")
-            locator = control.locator
-        if action.target_id:
+        preferred_target = action.action is ActionType.EXTRACT
+        if preferred_target and action.target_id:
             target = next((item for item in observation.readable_targets if item.ephemeral_id == action.target_id), None)
             if target is None:
                 raise SurfaceError(f"unknown readable target id: {action.target_id}")
             locator = target.locator
+        elif not preferred_target and action.control_id:
+            control = next((item for item in observation.controls if item.ephemeral_id == action.control_id), None)
+            if control is None:
+                raise SurfaceError(f"unknown control id: {action.control_id}")
+            locator = control.locator
+        elif action.target_id:
+            target = next((item for item in observation.readable_targets if item.ephemeral_id == action.target_id), None)
+            if target is None:
+                raise SurfaceError(f"unknown readable target id: {action.target_id}")
+            locator = target.locator
+        elif action.control_id:
+            control = next((item for item in observation.controls if item.ephemeral_id == action.control_id), None)
+            if control is None:
+                raise SurfaceError(f"unknown control id: {action.control_id}")
+            locator = control.locator
         if action.action is ActionType.EXTRACT:
             if locator is None or not action.output_name:
                 raise SurfaceError("extract requires target_id and output_name")
@@ -374,6 +403,9 @@ class DiscoveryRunner:
             value = self.surface.extract(locator)
             self.output_sources[output_name] = locator
             self.evidence.sensitive_values.add(value)
+            set_client_sensitive_values = getattr(self.client, "set_sensitive_values", None)
+            if callable(set_client_sensitive_values):
+                set_client_sensitive_values({value})
             set_sensitive_values = getattr(self.surface, "set_sensitive_values", None)
             if callable(set_sensitive_values):
                 set_sensitive_values({value})
@@ -382,6 +414,10 @@ class DiscoveryRunner:
             return
 
         runtime_value = action.value
+        if runtime_value is not None:
+            parameter_match = _PARAMETER.fullmatch(runtime_value)
+            if parameter_match and parameter_match.group(1) in self.parameter_values:
+                runtime_value = self.parameter_values[parameter_match.group(1)]
         artifact_value = (
             _parameterize_persisted_value(runtime_value, self.parameter_values, action.action)
             if runtime_value is not None
@@ -580,6 +616,31 @@ class DiscoveryRunner:
         self.evidence.event("run_finished", result=result.to_dict())
         return result, artifact
 
+    def _complete_if_ready(
+        self, observation: SurfaceObservation, step: str
+    ) -> tuple[RunResult, CapabilityArtifact | None] | None:
+        if not self.recorded_steps:
+            return None
+        if not self._checkpoint_matches(observation):
+            return None
+        missing_outputs = sorted(set(self.template.output_descriptions) - set(self.output_sources))
+        if missing_outputs:
+            return None
+        try:
+            artifact = self._artifact()
+            artifact.validate()
+            self.evidence.artifact_file(artifact)
+        except ValueError as exc:
+            return self._failure(RunStatus.HARD_FAILURE, step, "INVALID_ARTIFACT", str(exc))
+        result = RunResult(
+            status=RunStatus.SUCCESS,
+            run_id=self.evidence.run_id,
+            outputs={"declared": sorted(self.output_sources)},
+            evidence_dir=str(self.evidence.directory),
+        )
+        self.evidence.event("run_finished", result=result.to_dict())
+        return result, artifact
+
     def _failure(self, status: RunStatus, step: str, code: str, message: str) -> tuple[RunResult, None]:
         result = RunResult(
             status=status,
@@ -643,7 +704,7 @@ def _parameterize_persisted_value(
     return result
 
 
-_PARAMETER = re.compile(r"\{\{[A-Za-z_][A-Za-z0-9_]*\}\}")
+_PARAMETER = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 
 
 def _parameterize_url(value: str, parameter_values: dict[str, str]) -> str:

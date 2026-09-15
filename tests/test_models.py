@@ -162,6 +162,23 @@ def test_capability_rejects_non_ascii_label_locator_runtime_text():
         artifact.validate()
 
 
+def test_capability_rejects_unsafe_free_form_metadata():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="José Núñez",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={},
+        outputs={},
+        steps=(ActionStep("wait", ActionType.WAIT),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+
+    with pytest.raises(ValueError, match="unsafe free-form text"):
+        artifact.validate()
+
+
 def test_capability_rejects_query_data_in_css_link_locator():
     artifact = CapabilityArtifact(
         capability_id="cap",

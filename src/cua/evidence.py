@@ -3,12 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import re
 from typing import Any
-from urllib.parse import parse_qsl, quote, quote_plus, unquote, urlsplit, urlunsplit
+from urllib.parse import quote, quote_plus, unquote
 import uuid
 
-from .redaction import redact_artifact_payload, redact_url, redact_value
+from .redaction import redact_artifact_payload, redact_runtime_url, redact_url, redact_value
 
 
 def _redact_sensitive_names(value: Any, names: set[str]) -> Any:
@@ -98,29 +97,13 @@ def _redact_control_metadata(value: Any) -> Any:
     return value
 
 
-_PLACEHOLDER = re.compile(r"^\{\{[A-Za-z_][A-Za-z0-9_]*\}\}$")
-
-
-def _redact_runtime_url(value: str) -> str:
-    """Redact all runtime query values while preserving placeholders."""
-
-    parsed = urlsplit(value)
-    query = []
-    for key, item in parse_qsl(parsed.query, keep_blank_values=True):
-        safe_item = item if _PLACEHOLDER.fullmatch(item) else "<REDACTED>"
-        query.append(f"{quote(key, safe='')}={quote(safe_item, safe='{}')}")
-    return urlunsplit(
-        (parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "&".join(query), "")
-    )
-
-
 def _redact_runtime_urls(value: Any) -> Any:
     if isinstance(value, dict):
         result = {str(key): _redact_runtime_urls(item) for key, item in value.items()}
         for key in ("url", "current_url", "origin"):
             candidate = result.get(key)
             if isinstance(candidate, str) and "://" in candidate:
-                result[key] = _redact_runtime_url(candidate)
+                result[key] = redact_runtime_url(candidate)
         return result
     if isinstance(value, list):
         return [_redact_runtime_urls(item) for item in value]
@@ -169,7 +152,7 @@ class EvidenceRecorder:
         )))
 
     def redact_url(self, value: str) -> str:
-        return _redact_runtime_url(_redact_sensitive_values(redact_url(value), self.sensitive_values))
+        return redact_runtime_url(_redact_sensitive_values(redact_url(value), self.sensitive_values))
 
     def json_file(self, name: str, payload: Any) -> Path:
         path = self.directory / name

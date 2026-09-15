@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import threading
@@ -198,23 +198,27 @@ class HandoffCoordinator:
         request = self.get(pending.intervention_id)
         if request.state != HandoffState.HUMAN_CONTROL:
             raise RuntimeError("human must hold control before acting")
-        self.policy.check_step(pending.step, confirmed=pending.confirmed)
-        check_action_destination(self.policy, self.surface, pending.step)
+        safe_step = replace(
+            pending.step,
+            id=f"human-action-{len(request.human_actions) + 1}",
+        )
+        self.policy.check_step(safe_step, confirmed=pending.confirmed)
+        check_action_destination(self.policy, self.surface, safe_step)
         extracted: str | None = None
-        if pending.step.action is ActionType.EXTRACT:
-            if pending.step.target is None:
+        if safe_step.action is ActionType.EXTRACT:
+            if safe_step.target is None:
                 raise SurfaceError("human extract requires a target")
-            extracted = self.surface.extract(pending.step.target, pending.step.timeout_ms)
+            extracted = self.surface.extract(safe_step.target, safe_step.timeout_ms)
             self.evidence.sensitive_values.add(extracted)
             set_sensitive_values = getattr(self.surface, "set_sensitive_values", None)
             if callable(set_sensitive_values):
                 set_sensitive_values({extracted})
         else:
             self.surface.perform(
-                pending.step.action,
-                pending.step.target,
-                pending.step.value,
-                pending.step.timeout_ms,
+                safe_step.action,
+                safe_step.target,
+                safe_step.value,
+                safe_step.timeout_ms,
             )
         self.policy.check_url(self.surface.url)
         request.current_url = self.evidence.redact_url(self.surface.url)
@@ -229,12 +233,12 @@ class HandoffCoordinator:
                 "readable_targets": [],
                 "observation_error": str(exc),
             })
-        action = pending.step.to_dict()
+        action = safe_step.to_dict()
         redacted_action = {
             "id": action.get("id"),
             **self.evidence.redact_payload({key: value for key, value in action.items() if key != "id"}),
         }
-        if pending.step.action.value in {"fill", "navigate"} and "value" in redacted_action:
+        if safe_step.action.value in {"fill", "navigate"} and "value" in redacted_action:
             redacted_action["value"] = "<REDACTED>"
         request.human_actions.append(redacted_action)
         self.evidence.event(
@@ -245,9 +249,9 @@ class HandoffCoordinator:
             extracted_value="<REDACTED>" if extracted is not None else None,
         )
         if extracted is not None and self.on_human_output is not None:
-            self.on_human_output(pending.step, extracted)
+            self.on_human_output(safe_step, extracted)
         if self.on_human_action is not None:
-            self.on_human_action(pending.step)
+            self.on_human_action(safe_step)
 
     def resume(self, intervention_id: str) -> InterventionRequest:
         with self._condition:

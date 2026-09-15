@@ -66,7 +66,7 @@ The committed [example evidence](evidence/example/README.md) was made with the r
 
 ## Handoff
 
-Pass `--handoff` to `discover` to start a localhost operator API. When discovery reaches its step budget, it creates an intervention request, saves a redacted state snapshot, pauses, and waits for the operator to take control.
+Pass `--handoff` to `discover` to start a localhost operator API. Handoff automatically opens a headed browser so the authorized operator can see the live page while acting; the page content is not written to evidence. When discovery reaches its step budget, it creates an intervention request, saves a redacted structural state snapshot, pauses, and waits for the operator to take control.
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m cua.cli discover \
@@ -75,7 +75,7 @@ PYTHONPATH=src .venv/bin/python -m cua.cli discover \
 
 The printed endpoint supports `GET /interventions`, then `POST /interventions/{id}/take-control`, `POST /interventions/{id}/action`, and `POST /interventions/{id}/resume`. Actions go through the same live browser surface and guardrail policy. The localhost API is intentionally minimal and is not an internet-facing operator console. If the operator sends an `extract` action, the typed value is returned to the paused runner in memory; it is never written as raw evidence.
 
-Replay can expose the same handoff boundary when a fixed step is blocked or the surface fails:
+Replay can expose the same handoff boundary when a fixed step is blocked or the surface fails. It also opens a headed browser when `--handoff` is present:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m cua.cli replay \

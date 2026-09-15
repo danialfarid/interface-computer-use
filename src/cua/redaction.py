@@ -38,6 +38,9 @@ def redact_text(value: str) -> str:
         result = pattern.sub(lambda match: f"{match.group(1)}<REDACTED>", result)
     for pattern in _PII_PATTERNS:
         result = pattern.sub("<REDACTED>", result)
+    # A name or identifier outside the heuristic patterns must not survive
+    # merely because it contains non-ASCII characters.
+    result = re.sub(r"\S*[^\x00-\x7F]\S*", "<REDACTED>", result)
     return result
 
 
@@ -71,6 +74,22 @@ def redact_url(value: str) -> str:
         f"{quote(key, safe='')}={quote(item, safe='{}')}" for key, item in query
     )
     return urlunsplit((parsed.scheme, safe_netloc, parsed.path, encoded_query, ""))
+
+
+_PLACEHOLDER = re.compile(r"^\{\{[A-Za-z_][A-Za-z0-9_]*\}\}$")
+
+
+def redact_runtime_url(value: str) -> str:
+    """Redact every runtime query value while preserving placeholders."""
+
+    parsed = urlsplit(value)
+    query = []
+    for key, item in parse_qsl(parsed.query, keep_blank_values=True):
+        safe_item = item if _PLACEHOLDER.fullmatch(item) else "<REDACTED>"
+        query.append(f"{quote(key, safe='')}={quote(safe_item, safe='{}')}")
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "&".join(query), "")
+    )
 
 
 def redact_artifact_payload(payload: dict[str, Any]) -> dict[str, Any]:

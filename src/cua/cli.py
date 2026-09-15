@@ -90,7 +90,7 @@ def _run_discover(args: argparse.Namespace) -> int:
     demo_server = _ensure_demo_server(target_url)
     browser = BrowserSurface.open(
         target_url,
-        headless=not args.headed,
+        headless=not (args.headed or args.handoff),
         navigation_guard=policy.check_url,
     )
     template = member_balance_template(target_url)
@@ -147,7 +147,7 @@ def _run_replay(args: argparse.Namespace) -> int:
     evidence = EvidenceRecorder(args.evidence_dir)
     browser = BrowserSurface.open(
         target_url,
-        headless=not args.headed,
+        headless=not (args.headed or args.handoff),
         navigation_guard=policy.check_url,
     )
     handoff_server = None

@@ -207,6 +207,35 @@ def test_replay_succeeds_after_transient_timeout_recovery(tmp_path):
     assert result.status is RunStatus.SUCCESS
 
 
+def test_replay_does_not_retry_a_click_after_an_ambiguous_timeout(tmp_path):
+    class AmbiguousClickSurface(FakeReplaySurface):
+        click_attempts = 0
+
+        def perform(self, action, locator=None, value=None, timeout_ms=5000):
+            if action is ActionType.CLICK:
+                self.click_attempts += 1
+                raise SurfaceTimeout("click completed but response timed out")
+            super().perform(action, locator, value, timeout_ms)
+
+    surface = AmbiguousClickSurface()
+    policy = GuardrailPolicy(
+        allowed_origins=("http://127.0.0.1:8765",),
+        risky_actions=frozenset({ActionType.CLICK}),
+    )
+    result = ReplayRunner(
+        surface,
+        policy,
+        EvidenceRecorder(tmp_path),
+        artifact(),
+        inputs={"member_id": "1001"},
+        confirmed_risky=True,
+    ).run()
+
+    assert result.status is RunStatus.RECOVERABLE_FAILURE
+    assert result.error_code == "TIMEOUT"
+    assert surface.click_attempts == 1
+
+
 def test_replay_observation_failure_is_structured(tmp_path):
     class BrokenObservationSurface(FakeReplaySurface):
         def observe(self):

@@ -291,7 +291,10 @@ class ReplayRunner:
                     raise
 
         last_error: Exception | None = None
-        for attempt in range(self.max_retries + 1):
+        retryable = step.action in {ActionType.FILL, ActionType.NAVIGATE, ActionType.WAIT}
+        retryable = retryable and step.risk.value == "safe" and step.action not in self.policy.risky_actions
+        attempts = self.max_retries + 1 if retryable else 1
+        for attempt in range(attempts):
             try:
                 check_action_destination(self.policy, self.surface, step)
                 self.surface.perform(step.action, step.target, value, step.timeout_ms)
@@ -300,7 +303,7 @@ class ReplayRunner:
                 return
             except SurfaceTimeout as exc:
                 last_error = exc
-                if attempt < self.max_retries:
+                if attempt < attempts - 1:
                     self.evidence.event("recoverable", step=step.id, code="TRANSIENT_TIMEOUT", attempt=attempt + 1)
                     continue
                 raise

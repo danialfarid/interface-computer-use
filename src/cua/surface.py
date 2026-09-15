@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlsplit
 
 from .models import ActionType, Locator
 from .policy import PolicyViolation
+from .redaction import redact_text
 
 
 class SurfaceError(RuntimeError):
@@ -486,10 +487,64 @@ class BrowserSurface:
     def capture(self, directory: Path, stem: str) -> tuple[Path | None, Path]:
         directory.mkdir(parents=True, exist_ok=True)
         snapshot = directory / f"{stem}.txt"
-        # A generic redaction pass cannot reliably identify every name or
-        # regulated value, especially in Unicode text. Persist no page text.
-        snapshot.write_text("<REDACTED page content>\n", encoding="utf-8")
+        structure = self.page.locator("body").evaluate(
+            """(body) => {
+              let count = 0;
+              const visit = (element, depth) => {
+                if (count++ >= 300 || depth > 30) return null;
+                const role = element.getAttribute('role') || '';
+                const className = typeof element.className === 'string' ? element.className : '';
+                const errorMarker = element.getAttribute('aria-invalid') === 'true' ||
+                  role === 'alert' || /(^|[\\s_-])(error|invalid|failure)([\\s_-]|$)/i.test(className);
+                const state = {};
+                for (const [name, property] of Object.entries({
+                  disabled: 'disabled', readonly: 'readOnly', checked: 'checked', selected: 'selected'
+                })) {
+                  if (element[property] === true) state[name] = true;
+                }
+                if (element.getAttribute('aria-expanded')) state.expanded = element.getAttribute('aria-expanded');
+                if (element.getAttribute('aria-invalid')) state.invalid = element.getAttribute('aria-invalid');
+                const node = {
+                  tag: element.tagName.toLowerCase(),
+                  id: element.id || '',
+                  role,
+                  state,
+                  error_marker: errorMarker,
+                  children: []
+                };
+                for (const child of element.children) {
+                  const item = visit(child, depth + 1);
+                  if (item) node.children.push(item);
+                }
+                return node;
+              };
+              return visit(body, 0);
+            }"""
+        )
+        snapshot.write_text(
+            json.dumps(_sanitize_snapshot_structure(structure, self._sensitive_values), sort_keys=True),
+            encoding="utf-8",
+        )
         return None, snapshot
+
+
+def _sanitize_snapshot_structure(value: Any, sensitive_values: set[str]) -> Any:
+    if isinstance(value, dict):
+        allowed = {"tag", "id", "role", "state", "error_marker", "children"}
+        result = {
+            key: _sanitize_snapshot_structure(item, sensitive_values)
+            for key, item in value.items()
+            if key in allowed
+        }
+        if isinstance(result.get("id"), str):
+            redacted = redact_text(result["id"])
+            for sensitive in sorted(sensitive_values, key=len, reverse=True):
+                redacted = redacted.replace(sensitive, "<REDACTED>")
+            result["id"] = redacted
+        return result
+    if isinstance(value, list):
+        return [_sanitize_snapshot_structure(item, sensitive_values) for item in value]
+    return value
 
 
 def _websocket_guard_script(origins: tuple[str, ...], route_prefixes: tuple[str, ...]) -> str:
