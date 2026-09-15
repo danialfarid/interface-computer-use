@@ -131,7 +131,7 @@ class DiscoveryRunner:
                     current = self.surface.observe()
                     if self._checkpoint_matches(current):
                         artifact = self._artifact()
-                        self.evidence.json_file("artifact.json", artifact.to_dict())
+                        self.evidence.artifact_file(artifact)
                         result = RunResult(
                             status=RunStatus.SUCCESS,
                             run_id=self.evidence.run_id,
@@ -197,6 +197,8 @@ class DiscoveryRunner:
         if action.action is ActionType.EXTRACT:
             if locator is None or not action.output_name:
                 raise SurfaceError("extract requires target_id and output_name")
+            if locator.strategy == "text" and any(char.isdigit() for char in locator.value):
+                raise SurfaceError("refusing to persist a dynamic value as an output locator")
             self.output_sources[action.output_name] = locator
             value = self.surface.extract(locator)
             self.evidence.event("extraction", name=action.output_name, value=value)

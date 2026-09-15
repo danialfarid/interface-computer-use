@@ -8,8 +8,8 @@ from urllib.parse import parse_qs, urlparse
 # Synthetic values only. The app exists to exercise the UI seam, not to model a
 # real financial system or accept real member data.
 DEMO_MEMBERS: dict[str, dict[str, str]] = {
-    "1001": {"name": "Avery Example", "balance": "$1,240.50"},
-    "1002": {"name": "Jordan Sample", "balance": "$85.19"},
+    "1001": {"name": "DEMO_MEMBER_1001", "balance": "$1,240.50"},
+    "1002": {"name": "DEMO_MEMBER_1002", "balance": "$85.19"},
 }
 
 

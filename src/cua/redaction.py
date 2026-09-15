@@ -9,6 +9,7 @@ _SECRET_PATTERNS = (
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]+"),
 )
 _PII_PATTERNS = (
+    re.compile(r"(?i)\b(?:demo|synthetic)[_-]?(?:member|user)[_-]?\d+\b"),
     re.compile(r"\b\d{4,}\b"),
     re.compile(r"\$\s?[\d,]+(?:\.\d{2})?"),
     re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"),

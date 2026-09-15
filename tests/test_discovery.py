@@ -38,7 +38,7 @@ class FakeSurface:
             "Member details",
             "Member details Current savings balance $1,240.50",
             (),
-            (ReadableTarget("target-0", "$1,240.50", Locator("text", "$1,240.50")),),
+            (ReadableTarget("target-0", "$1,240.50", Locator("css", "#balance-value")),),
         )
 
     def perform(self, action, locator=None, value=None, timeout_ms=5000):
@@ -93,7 +93,7 @@ def test_discovery_records_parameterized_steps_and_output(tmp_path):
     assert result.status is RunStatus.SUCCESS
     assert artifact is not None
     assert artifact.steps[1].value == "{{member_id}}" or artifact.steps[0].value == "{{member_id}}"
-    assert artifact.outputs["balance"].source.strategy == "text"
+    assert artifact.outputs["balance"].source.strategy == "css"
     assert "1001" not in artifact.to_json()
 
 

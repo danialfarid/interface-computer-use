@@ -69,7 +69,7 @@ def artifact():
         steps=(
             ActionStep("fill", ActionType.FILL, Locator("label", "Member ID"), "{{member_id}}"),
             ActionStep("search", ActionType.CLICK, Locator("role", "button:Search")),
-            ActionStep("read", ActionType.EXTRACT, Locator("text", "Current savings balance"), "balance"),
+            ActionStep("read", ActionType.EXTRACT, Locator("css", "#balance-value"), "balance"),
         ),
         checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "Member details", "details visible"),
         business_outcomes=(BusinessOutcome("MEMBER_NOT_FOUND", "No such member", "Member not found"),),

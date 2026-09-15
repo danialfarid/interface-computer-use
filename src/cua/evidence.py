@@ -33,6 +33,13 @@ class EvidenceRecorder:
         path.write_text(json.dumps(redact_value(name, payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return path
 
+    def artifact_file(self, artifact: Any) -> Path:
+        """Persist a validated artifact; runtime values never belong in one."""
+
+        path = self.directory / "artifact.json"
+        path.write_text(artifact.to_json(), encoding="utf-8")
+        return path
+
     def failure_snapshot(self, surface: Any, label: str) -> dict[str, str]:
         screenshot, snapshot = surface.capture(self.directory, label)
         self.event(
