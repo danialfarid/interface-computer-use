@@ -1,5 +1,73 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "locator": {
+      "type": "object",
+      "required": ["strategy", "value"],
+      "properties": {
+        "strategy": {"enum": ["label", "role", "css", "text"]},
+        "value": {"type": "string", "minLength": 1},
+        "fallback": {"type": "array", "items": {"$ref": "#/$defs/locator"}, "maxItems": 4},
+        "rationale": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "parameter": {
+      "type": "object",
+      "required": ["type", "description", "required"],
+      "properties": {
+        "type": {"enum": ["string", "integer"]},
+        "description": {"type": "string", "minLength": 1},
+        "required": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "required": ["type", "description", "source", "sensitive"],
+      "properties": {
+        "type": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "source": {"$ref": "#/$defs/locator"},
+        "sensitive": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "step": {
+      "type": "object",
+      "required": ["id", "action", "risk", "timeout_ms"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "action": {"enum": ["navigate", "click", "fill", "press", "wait", "extract"]},
+        "target": {"$ref": "#/$defs/locator"},
+        "value": {"type": "string"},
+        "risk": {"enum": ["safe", "risky"]},
+        "timeout_ms": {"type": "integer", "minimum": 1},
+        "description": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "checkpoint": {
+      "type": "object",
+      "required": ["kind", "value", "description"],
+      "properties": {
+        "kind": {"enum": ["text_present", "url_prefix"]},
+        "value": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "business_outcome": {
+      "type": "object",
+      "required": ["code", "description", "detection_text"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "detection_text": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
+  },
   "title": "Computer-use capability artifact",
   "type": "object",
   "required": [
@@ -17,19 +85,35 @@
     "business_outcomes"
   ],
   "properties": {
-    "schema_version": {"type": "string"},
+    "schema_version": {"type": "string", "minLength": 1},
     "artifact_version": {"type": "integer", "minimum": 1},
     "capability_id": {"type": "string", "minLength": 1},
     "name": {"type": "string", "minLength": 1},
     "description": {"type": "string"},
-    "surface_kind": {"type": "string"},
-    "target": {"type": "object", "additionalProperties": {"type": "string"}},
-    "parameters": {"type": "object"},
-    "outputs": {"type": "object"},
-    "steps": {"type": "array", "minItems": 1},
-    "checkpoint": {"type": "object"},
-    "business_outcomes": {"type": "array"},
-    "created_at": {"type": "string"}
+    "surface_kind": {"type": "string", "minLength": 1},
+    "target": {
+      "type": "object",
+      "required": ["url", "origin"],
+      "properties": {
+        "url": {"type": "string", "format": "uri"},
+        "origin": {"type": "string", "format": "uri"}
+      },
+      "additionalProperties": false
+    },
+    "parameters": {
+      "type": "object",
+      "patternProperties": {"^[A-Za-z_][A-Za-z0-9_]*$": {"$ref": "#/$defs/parameter"}},
+      "additionalProperties": false
+    },
+    "outputs": {
+      "type": "object",
+      "patternProperties": {"^[A-Za-z_][A-Za-z0-9_]*$": {"$ref": "#/$defs/output"}},
+      "additionalProperties": false
+    },
+    "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/step"}},
+    "checkpoint": {"$ref": "#/$defs/checkpoint"},
+    "business_outcomes": {"type": "array", "items": {"$ref": "#/$defs/business_outcome"}},
+    "created_at": {"type": "string", "format": "date-time"}
   },
   "additionalProperties": false
 }
