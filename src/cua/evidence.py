@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any
-from urllib.parse import quote, quote_plus
+from urllib.parse import parse_qsl, quote, quote_plus, unquote, urlsplit, urlunsplit
 import uuid
 
 from .redaction import redact_artifact_payload, redact_url, redact_value
@@ -60,25 +61,69 @@ def _redact_readable_targets(value: Any) -> Any:
 
 
 def _redact_control_metadata(value: Any) -> Any:
-    """Keep visible link names out of persisted observations and action logs."""
+    """Keep visible names, labels, and unsafe selector text out of evidence."""
 
     if isinstance(value, dict):
         result = {str(key): _redact_control_metadata(item) for key, item in value.items()}
         controls = result.get("controls")
         if isinstance(controls, list):
             for control in controls:
-                if isinstance(control, dict) and control.get("kind") == "link":
+                if isinstance(control, dict) and "name" in control:
                     control["name"] = "<REDACTED>"
+        if isinstance(result.get("text"), str) and "controls" in result:
+            result["text"] = "<REDACTED>"
+            if "title" in result:
+                result["title"] = "<REDACTED>"
         locators = [result.get("locator"), result if "strategy" in result else None]
         for locator in locators:
             if not isinstance(locator, dict):
                 continue
+            strategy = locator.get("strategy")
             locator_value = locator.get("value")
-            if isinstance(locator_value, str) and any(ord(character) > 127 for character in locator_value):
+            decoded_value = unquote(locator_value) if isinstance(locator_value, str) else ""
+            unsafe_url_selector = (
+                strategy == "css"
+                and isinstance(locator_value, str)
+                and "href=" in locator_value
+                and ("?" in locator_value or "&" in locator_value)
+            )
+            if (
+                isinstance(locator_value, str)
+                and any(ord(character) > 127 for character in decoded_value)
+            ) or unsafe_url_selector:
                 locator["value"] = "<REDACTED>"
         return result
     if isinstance(value, list):
         return [_redact_control_metadata(item) for item in value]
+    return value
+
+
+_PLACEHOLDER = re.compile(r"^\{\{[A-Za-z_][A-Za-z0-9_]*\}\}$")
+
+
+def _redact_runtime_url(value: str) -> str:
+    """Redact all runtime query values while preserving placeholders."""
+
+    parsed = urlsplit(value)
+    query = []
+    for key, item in parse_qsl(parsed.query, keep_blank_values=True):
+        safe_item = item if _PLACEHOLDER.fullmatch(item) else "<REDACTED>"
+        query.append(f"{quote(key, safe='')}={quote(safe_item, safe='{}')}")
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "&".join(query), "")
+    )
+
+
+def _redact_runtime_urls(value: Any) -> Any:
+    if isinstance(value, dict):
+        result = {str(key): _redact_runtime_urls(item) for key, item in value.items()}
+        for key in ("url", "current_url", "origin"):
+            candidate = result.get(key)
+            if isinstance(candidate, str) and "://" in candidate:
+                result[key] = _redact_runtime_url(candidate)
+        return result
+    if isinstance(value, list):
+        return [_redact_runtime_urls(item) for item in value]
     return value
 
 
@@ -116,13 +161,15 @@ class EvidenceRecorder:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
 
     def redact_payload(self, payload: Any) -> Any:
-        return _redact_control_metadata(_redact_readable_targets(_redact_sensitive_values(
-            _redact_sensitive_names(redact_value("payload", payload), self.sensitive_names),
-            self.sensitive_values,
+        return _redact_runtime_urls(_redact_control_metadata(_redact_readable_targets(
+            _redact_sensitive_values(
+                _redact_sensitive_names(redact_value("payload", payload), self.sensitive_names),
+                self.sensitive_values,
+            )
         )))
 
     def redact_url(self, value: str) -> str:
-        return _redact_sensitive_values(redact_url(value), self.sensitive_values)
+        return _redact_runtime_url(_redact_sensitive_values(redact_url(value), self.sensitive_values))
 
     def json_file(self, name: str, payload: Any) -> Path:
         path = self.directory / name

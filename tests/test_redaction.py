@@ -83,6 +83,41 @@ def test_evidence_redacts_unicode_role_action_names(tmp_path):
     assert "José Núñez" not in json.dumps(record["payload"], ensure_ascii=False)
 
 
+def test_evidence_redacts_unicode_observation_content_and_labels(tmp_path):
+    evidence = EvidenceRecorder(tmp_path)
+    evidence.event(
+        "observation",
+        observation={
+            "url": "http://127.0.0.1:8765/",
+            "title": "José Núñez",
+            "text": "Member José Núñez",
+            "controls": [
+                {
+                    "kind": "input",
+                    "name": "José Núñez",
+                    "locator": {"strategy": "label", "value": "José Núñez"},
+                }
+            ],
+        },
+    )
+
+    record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
+    assert "José Núñez" not in json.dumps(record["payload"], ensure_ascii=False)
+
+
+def test_evidence_redacts_arbitrary_query_values(tmp_path):
+    evidence = EvidenceRecorder(tmp_path)
+    evidence.event(
+        "observation",
+        url="http://127.0.0.1:8765/?person=Jos%C3%A9%20N%C3%BA%C3%B1ez",
+    )
+
+    record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
+    payload = json.dumps(record["payload"], ensure_ascii=False)
+    assert "José" not in payload
+    assert "Jos%C3%A9" not in payload
+
+
 def test_evidence_redacts_uri_encoded_sensitive_values(tmp_path):
     evidence = EvidenceRecorder(tmp_path)
     evidence.sensitive_values.add("ab cd")

@@ -87,6 +87,7 @@ class DiscoveryRunner:
         self.output_sources: dict[str, Locator] = {}
         self._artifact_target_url = template.target["url"]
         self._handoff_step_start = 0
+        self._handoff_entry_url = template.target["url"]
         self._handoff_used = False
         self.evidence.sensitive_names.update(
             name for name, spec in self.template.output_descriptions.items() if spec[2]
@@ -307,6 +308,8 @@ class DiscoveryRunner:
                 reason="discovery reached its step budget without a safe completion",
                 observation=observation,
             )
+            self._handoff_step_start = len(self.recorded_steps)
+            self._handoff_entry_url = observation.url
             self.evidence.event("run_paused", intervention_id=request.intervention_id)
             if not self.handoff.wait_for_resume(request.intervention_id, self.handoff_wait_s):
                 self.evidence.failure_snapshot(self.surface, "failure-handoff-timeout")
@@ -317,6 +320,7 @@ class DiscoveryRunner:
                     "human intervention was not completed before the wait expired",
                 )
             self.evidence.event("run_resumed", intervention_id=request.intervention_id)
+            self._start_replay_boundary()
             self._handoff_used = True
             step_number = 0
             try:
@@ -500,6 +504,7 @@ class DiscoveryRunner:
                 observation = self.surface.observe()
             except (PolicyViolation, SurfaceError):
                 observation = SurfaceObservation(self.surface.url, "", "", ())
+        self._handoff_entry_url = observation.url
         request = self.handoff.create_request(
             goal=goal,
             capability_id=self.template.capability_id,
@@ -518,8 +523,13 @@ class DiscoveryRunner:
     def _start_replay_boundary(self) -> None:
         """Start the artifact from the state reached after human intervention."""
 
-        self._artifact_target_url = self.surface.url
         post_handoff_steps = self.recorded_steps[self._handoff_step_start :]
+        entry_url = self._handoff_entry_url
+        for step in post_handoff_steps:
+            if step.action is ActionType.NAVIGATE and step.value:
+                entry_url = step.value
+                break
+        self._artifact_target_url = entry_url
         self.output_sources = {
             step.value: self.output_sources[step.value]
             for step in post_handoff_steps
@@ -534,11 +544,7 @@ class DiscoveryRunner:
         )
         self.recorded_steps = [
             anchor,
-            *[
-                step
-                for step in post_handoff_steps
-                if step.action is ActionType.EXTRACT and step.value in self.output_sources
-            ],
+            *post_handoff_steps,
         ]
 
     def _complete_after_handoff(

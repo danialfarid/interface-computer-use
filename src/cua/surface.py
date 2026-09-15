@@ -10,7 +10,6 @@ from urllib.parse import urljoin, urlsplit
 
 from .models import ActionType, Locator
 from .policy import PolicyViolation
-from .redaction import redact_text
 
 
 class SurfaceError(RuntimeError):
@@ -301,7 +300,7 @@ class BrowserSurface:
             if info["id"]:
                 locator = Locator(
                     "css",
-                    f"#{info['id']}",
+                    f"[id={_quote_css(info['id'])}]",
                     rationale="Stable author-provided id for a readable output target.",
                 )
             else:
@@ -315,17 +314,17 @@ class BrowserSurface:
 
     @staticmethod
     def _stable_locator(info: dict[str, str]) -> Locator:
+        if info["id"]:
+            return Locator(
+                "css",
+                f"[id={_quote_css(info['id'])}]",
+                rationale="Author-provided element id is the most stable available control locator.",
+            )
         if info["label"]:
             return Locator(
                 "label",
                 info["label"],
                 rationale="Associated form label is more stable than position or generated markup.",
-            )
-        if info["id"]:
-            return Locator(
-                "css",
-                f"#{info['id']}",
-                rationale="Author-provided element id; used only when semantic metadata is absent.",
             )
         if info["aria"]:
             return Locator(
@@ -487,11 +486,9 @@ class BrowserSurface:
     def capture(self, directory: Path, stem: str) -> tuple[Path | None, Path]:
         directory.mkdir(parents=True, exist_ok=True)
         snapshot = directory / f"{stem}.txt"
-        text = str(self.page.locator("body").inner_text())
-        redacted = redact_text(text)
-        for value in sorted(self._sensitive_values, key=len, reverse=True):
-            redacted = redacted.replace(value, "<REDACTED>")
-        snapshot.write_text(redacted, encoding="utf-8")
+        # A generic redaction pass cannot reliably identify every name or
+        # regulated value, especially in Unicode text. Persist no page text.
+        snapshot.write_text("<REDACTED page content>\n", encoding="utf-8")
         return None, snapshot
 
 

@@ -183,7 +183,7 @@ def test_operator_api_action_is_applied_by_browser_owner_thread(tmp_path):
 
         assert response_body[0]["human_actions"][0]["id"] == "human-search"
         assert response_body[0]["current_url"].endswith("/member")
-        assert response_body[0]["observation"]["title"] == "Member details"
+        assert response_body[0]["observation"]["title"] == "<REDACTED>"
         assert surface.actions[0][0] is ActionType.CLICK
     finally:
         server.close()

@@ -310,9 +310,22 @@ def test_discovery_escalates_a_blocked_risky_action_to_human_control(tmp_path):
     assert not operator_errors
     assert result.status is RunStatus.SUCCESS
     assert artifact is not None
-    assert artifact.target["url"] == "http://127.0.0.1:8765/member"
+    assert artifact.target["url"] == "http://127.0.0.1:8765/"
     assert artifact.steps[0].id == "handoff-anchor"
-    assert artifact.steps[1].action is ActionType.EXTRACT
+    assert [step.action for step in artifact.steps] == [
+        ActionType.NAVIGATE,
+        ActionType.CLICK,
+        ActionType.EXTRACT,
+    ]
+    replay_result = ReplayRunner(
+        FakeSurface(),
+        policy,
+        EvidenceRecorder(tmp_path / "replay"),
+        artifact,
+        inputs={"member_id": "1001"},
+        confirmed_risky=True,
+    ).run()
+    assert replay_result.status is RunStatus.SUCCESS
 
 
 @pytest.mark.parametrize("model_marks_done", [False, True])
@@ -363,6 +376,12 @@ def test_discovery_accepts_complete_human_work_at_the_step_budget_boundary(tmp_p
     assert not operator_errors
     assert result.status is RunStatus.SUCCESS
     assert artifact is not None
+    assert [step.action for step in artifact.steps] == [
+        ActionType.NAVIGATE,
+        ActionType.FILL,
+        ActionType.CLICK,
+        ActionType.EXTRACT,
+    ]
 
 
 def test_discovery_accepts_complete_human_work_after_llm_error(tmp_path):
@@ -548,7 +567,10 @@ def test_discovery_hands_off_terminal_application_error(tmp_path):
     assert result.status is RunStatus.SUCCESS
     assert artifact is not None
     assert artifact.target["url"] == "http://127.0.0.1:8765/"
-    assert [step.action for step in artifact.steps] == [ActionType.NAVIGATE]
+    assert [step.action for step in artifact.steps] == [
+        ActionType.NAVIGATE,
+        ActionType.NAVIGATE,
+    ]
     replay_result = ReplayRunner(
         AppErrorAfterFillSurface(),
         policy,

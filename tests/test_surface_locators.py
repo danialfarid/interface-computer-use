@@ -18,3 +18,11 @@ def test_stable_locator_prefers_label_then_stable_dom_metadata_then_role():
     assert BrowserSurface._stable_locator(
         {"label": "", "role": "link", "text": "Return to lookup", "aria": "", "name": "", "tag": "a", "id": "", "href": "/"}
     ).value == 'a[href="/"]'
+
+
+def test_stable_locator_quotes_punctuation_in_dom_ids():
+    locator = BrowserSurface._stable_locator(
+        {"label": "", "role": "cell", "text": "$1,240.50", "aria": "", "name": "", "tag": "td", "id": "balance.value", "href": ""}
+    )
+
+    assert locator.value == '[id="balance.value"]'

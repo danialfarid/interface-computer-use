@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 import json
 from typing import Any, Mapping
+from urllib.parse import unquote
 
 from .redaction import redact_text
 
@@ -398,8 +399,15 @@ class CapabilityArtifact:
 def _validate_locator_persistence(locator: Locator, owner: str) -> None:
     if locator.strategy not in Locator.SUPPORTED_STRATEGIES:
         raise ValueError(f"{owner} has an unsupported locator strategy: {locator.strategy}")
-    if locator.strategy in {"role", "css"} and any(
-        ord(character) > 127 for character in locator.value
+    if (
+        locator.strategy == "css"
+        and "href=" in locator.value
+        and ("?" in locator.value or "&" in locator.value)
+    ):
+        raise ValueError(f"{owner} URL locator cannot persist query data")
+    decoded_value = unquote(locator.value)
+    if locator.strategy in {"label", "role", "css"} and any(
+        ord(character) > 127 for character in decoded_value
     ):
         raise ValueError(f"{owner} locator contains non-ASCII runtime text")
     if locator.strategy == "role" and locator.value.partition(":")[0] == "link":

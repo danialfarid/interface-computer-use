@@ -145,6 +145,46 @@ def test_capability_rejects_non_ascii_role_locator_runtime_text():
         artifact.validate()
 
 
+def test_capability_rejects_non_ascii_label_locator_runtime_text():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={},
+        outputs={},
+        steps=(ActionStep("fill", ActionType.FILL, Locator("label", "José Núñez"), "{{member_id}}"),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+
+    with pytest.raises(ValueError, match="non-ASCII"):
+        artifact.validate()
+
+
+def test_capability_rejects_query_data_in_css_link_locator():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={},
+        outputs={},
+        steps=(
+            ActionStep(
+                "click",
+                ActionType.CLICK,
+                Locator("css", 'a[href="/?person=Jos%C3%A9%20N%C3%BA%C3%B1ez"]'),
+            ),
+        ),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+
+    with pytest.raises(ValueError, match="query data"):
+        artifact.validate()
+
+
 def test_capability_rejects_empty_business_outcome_fields():
     artifact = CapabilityArtifact(
         capability_id="cap",
