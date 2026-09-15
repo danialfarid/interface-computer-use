@@ -261,3 +261,58 @@ def test_handoff_deadline_rejects_actions_queued_after_a_slow_action(tmp_path):
     assert len(errors) == 1
     assert "expired" in str(errors[0])
     assert coordinator.get(request.intervention_id).state == HandoffState.CLOSED
+
+
+def test_handoff_rejects_resume_after_deadline_while_action_is_running(tmp_path):
+    class SlowSurface(FakeSurface):
+        def perform(self, action, locator=None, value=None, timeout_ms=5000):
+            if action is ActionType.WAIT:
+                time.sleep(int(value or "0") / 1000)
+            super().perform(action, locator, value, timeout_ms)
+
+    surface = SlowSurface()
+    coordinator = HandoffCoordinator(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+    )
+    request = coordinator.create_request(
+        goal="goal", capability_id="cap", step="step", reason="stuck", observation=surface.observe()
+    )
+    coordinator.take_control(request.intervention_id, "reviewer")
+    action_errors: list[Exception] = []
+    resume_errors: list[Exception] = []
+
+    def submit_action():
+        try:
+            coordinator.record_human_action(
+                request.intervention_id,
+                ActionStep("slow", ActionType.WAIT, value="300"),
+            )
+        except Exception as exc:
+            action_errors.append(exc)
+
+    def submit_resume():
+        time.sleep(0.15)
+        try:
+            coordinator.resume(request.intervention_id)
+        except Exception as exc:
+            resume_errors.append(exc)
+
+    action_worker = threading.Thread(target=submit_action)
+    resume_worker = threading.Thread(target=submit_resume)
+    action_worker.start()
+    while len(coordinator._pending_actions) < 1:
+        time.sleep(0.001)
+    resume_worker.start()
+
+    assert coordinator.wait_for_resume(request.intervention_id, timeout_s=0.05) is False
+    action_worker.join(timeout=2)
+    resume_worker.join(timeout=2)
+
+    assert not action_worker.is_alive()
+    assert not resume_worker.is_alive()
+    assert not action_errors
+    assert len(resume_errors) == 1
+    assert "expired" in str(resume_errors[0])
+    assert coordinator.get(request.intervention_id).state == HandoffState.CLOSED

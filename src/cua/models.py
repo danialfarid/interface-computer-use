@@ -33,6 +33,8 @@ class CheckpointKind(StrEnum):
 class Locator:
     """A reviewable locator with an explicit primary and optional fallback."""
 
+    SUPPORTED_STRATEGIES = frozenset({"label", "text", "css", "role"})
+
     strategy: str
     value: str
     fallback: tuple["Locator", ...] = ()
@@ -51,11 +53,25 @@ class Locator:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "Locator":
+        if not isinstance(value, Mapping):
+            raise ValueError("locator must be an object")
+        strategy = value.get("strategy")
+        locator_value = value.get("value")
+        if not isinstance(strategy, str) or strategy not in cls.SUPPORTED_STRATEGIES:
+            raise ValueError(f"unsupported locator strategy: {strategy!r}")
+        if not isinstance(locator_value, str) or not locator_value:
+            raise ValueError("locator value must be a non-empty string")
+        fallback = value.get("fallback", [])
+        rationale = value.get("rationale", "")
+        if not isinstance(fallback, list):
+            raise ValueError("locator fallback must be a list")
+        if not isinstance(rationale, str):
+            raise ValueError("locator rationale must be a string")
         return cls(
-            strategy=str(value["strategy"]),
-            value=str(value["value"]),
-            fallback=tuple(cls.from_dict(item) for item in value.get("fallback", [])),
-            rationale=str(value.get("rationale", "")),
+            strategy=strategy,
+            value=locator_value,
+            fallback=tuple(cls.from_dict(item) for item in fallback),
+            rationale=rationale,
         )
 
 
@@ -65,6 +81,19 @@ class ParameterSpec:
     description: str
     required: bool = True
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ParameterSpec":
+        if not isinstance(value, Mapping):
+            raise ValueError("parameter specification must be an object")
+        parameter_type = value.get("type")
+        description = value.get("description")
+        required = value.get("required", True)
+        if not isinstance(parameter_type, str) or not isinstance(description, str):
+            raise ValueError("parameter type and description must be strings")
+        if not isinstance(required, bool):
+            raise ValueError("parameter required must be a boolean")
+        return cls(parameter_type, description, required)
+
 
 @dataclass(frozen=True)
 class OutputSpec:
@@ -72,6 +101,19 @@ class OutputSpec:
     description: str
     source: Locator
     sensitive: bool = True
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "OutputSpec":
+        if not isinstance(value, Mapping):
+            raise ValueError("output specification must be an object")
+        output_type = value.get("type")
+        description = value.get("description")
+        sensitive = value.get("sensitive", True)
+        if not isinstance(output_type, str) or not isinstance(description, str):
+            raise ValueError("output type and description must be strings")
+        if not isinstance(sensitive, bool):
+            raise ValueError("output sensitive must be a boolean")
+        return cls(output_type, description, Locator.from_dict(value.get("source", {})), sensitive)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,15 +151,35 @@ class ActionStep:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "ActionStep":
+        if not isinstance(value, Mapping):
+            raise ValueError("action step must be an object")
         target = value.get("target")
+        step_id = value.get("id")
+        action = value.get("action")
+        risk = value.get("risk", RiskClass.SAFE.value)
+        timeout_ms = value.get("timeout_ms", 5_000)
+        description = value.get("description", "")
+        step_value = value.get("value")
+        if not isinstance(step_id, str) or not step_id:
+            raise ValueError("step id must be a non-empty string")
+        if not isinstance(action, str):
+            raise ValueError("step action must be a string")
+        if not isinstance(risk, str):
+            raise ValueError("step risk must be a string")
+        if not isinstance(timeout_ms, int) or isinstance(timeout_ms, bool):
+            raise ValueError("step timeout_ms must be an integer")
+        if not isinstance(description, str):
+            raise ValueError("step description must be a string")
+        if step_value is not None and not isinstance(step_value, str):
+            raise ValueError("step value must be a string")
         return cls(
-            id=str(value["id"]),
-            action=ActionType(str(value["action"])),
-            target=Locator.from_dict(target) if target else None,
-            value=str(value["value"]) if value.get("value") is not None else None,
-            risk=RiskClass(str(value.get("risk", RiskClass.SAFE.value))),
-            timeout_ms=int(value.get("timeout_ms", 5_000)),
-            description=str(value.get("description", "")),
+            id=step_id,
+            action=ActionType(action),
+            target=Locator.from_dict(target) if target is not None else None,
+            value=step_value,
+            risk=RiskClass(risk),
+            timeout_ms=timeout_ms,
+            description=description,
         )
 
 
@@ -188,6 +250,10 @@ class CapabilityArtifact:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
 
     def validate(self) -> None:
+        if not isinstance(self.schema_version, str):
+            raise ValueError("schema_version must be a string")
+        if not isinstance(self.artifact_version, int) or isinstance(self.artifact_version, bool):
+            raise ValueError("artifact_version must be an integer")
         if self.schema_version != SUPPORTED_SCHEMA_VERSION:
             raise ValueError(f"unsupported capability schema version: {self.schema_version}")
         if self.artifact_version < 1:
@@ -204,6 +270,8 @@ class CapabilityArtifact:
         for name, spec in self.outputs.items():
             if spec.type not in {"string", "integer"}:
                 raise ValueError(f"unsupported output type for {name}: {spec.type}")
+            if spec.source.strategy == "text":
+                raise ValueError(f"output source for {name} cannot use a text locator")
         if not self.steps:
             raise ValueError("a capability must contain at least one step")
         extracted_outputs: set[str] = set()
@@ -229,46 +297,86 @@ class CapabilityArtifact:
 
     @classmethod
     def _from_dict(cls, value: Mapping[str, Any]) -> "CapabilityArtifact":
+        raw_parameters = value.get("parameters", {})
+        raw_outputs = value.get("outputs", {})
+        raw_steps = value.get("steps")
+        if not isinstance(raw_parameters, Mapping) or not isinstance(raw_outputs, Mapping):
+            raise ValueError("parameters and outputs must be objects")
+        if not isinstance(raw_steps, list):
+            raise ValueError("steps must be a list")
         parameters = {
-            name: ParameterSpec(**dict(spec))
-            for name, spec in dict(value.get("parameters", {})).items()
+            name: ParameterSpec.from_dict(spec)
+            for name, spec in raw_parameters.items()
+            if isinstance(name, str)
         }
+        if len(parameters) != len(raw_parameters):
+            raise ValueError("parameter names must be strings")
         outputs = {
-            name: OutputSpec(
-                type=str(spec["type"]),
-                description=str(spec["description"]),
-                source=Locator.from_dict(spec["source"]),
-                sensitive=bool(spec.get("sensitive", True)),
-            )
-            for name, spec in dict(value.get("outputs", {})).items()
+            name: OutputSpec.from_dict(spec)
+            for name, spec in raw_outputs.items()
+            if isinstance(name, str)
         }
+        if len(outputs) != len(raw_outputs):
+            raise ValueError("output names must be strings")
         checkpoint_value = value["checkpoint"]
+        if not isinstance(checkpoint_value, Mapping):
+            raise ValueError("checkpoint must be an object")
+        checkpoint_kind = checkpoint_value.get("kind")
+        checkpoint_text = checkpoint_value.get("value")
+        checkpoint_description = checkpoint_value.get("description")
+        if not all(isinstance(item, str) for item in (checkpoint_kind, checkpoint_text, checkpoint_description)):
+            raise ValueError("checkpoint kind, value, and description must be strings")
         checkpoint = Checkpoint(
-            kind=CheckpointKind(str(checkpoint_value["kind"])),
-            value=str(checkpoint_value["value"]),
-            description=str(checkpoint_value["description"]),
+            kind=CheckpointKind(checkpoint_kind),
+            value=checkpoint_text,
+            description=checkpoint_description,
         )
+        required_strings = ("capability_id", "name", "description", "surface_kind")
+        if not all(isinstance(value.get(name), str) for name in required_strings):
+            raise ValueError("capability identity fields must be strings")
+        target = value.get("target")
+        if not isinstance(target, Mapping) or not all(
+            isinstance(key, str) and isinstance(item, str) for key, item in target.items()
+        ):
+            raise ValueError("target must be an object of string fields")
+        schema_version = value.get("schema_version", SUPPORTED_SCHEMA_VERSION)
+        artifact_version = value.get("artifact_version", 1)
+        created_at = value.get("created_at", "")
+        raw_business_outcomes = value.get("business_outcomes", [])
+        if not isinstance(schema_version, str):
+            raise ValueError("schema_version must be a string")
+        if not isinstance(artifact_version, int) or isinstance(artifact_version, bool):
+            raise ValueError("artifact_version must be an integer")
+        if not isinstance(created_at, str):
+            raise ValueError("created_at must be a string")
+        if not isinstance(raw_business_outcomes, list):
+            raise ValueError("business_outcomes must be a list")
+        for item in raw_business_outcomes:
+            if not isinstance(item, Mapping) or not all(
+                isinstance(item.get(name), str) for name in ("code", "description", "detection_text")
+            ):
+                raise ValueError("business outcomes must contain string fields")
         artifact = cls(
-            schema_version=str(value.get("schema_version", "1.0")),
-            artifact_version=int(value.get("artifact_version", 1)),
-            capability_id=str(value["capability_id"]),
-            name=str(value["name"]),
-            description=str(value["description"]),
-            surface_kind=str(value["surface_kind"]),
-            target={str(k): str(v) for k, v in dict(value["target"]).items()},
+            schema_version=schema_version,
+            artifact_version=artifact_version,
+            capability_id=value["capability_id"],
+            name=value["name"],
+            description=value["description"],
+            surface_kind=value["surface_kind"],
+            target=dict(target),
             parameters=parameters,
             outputs=outputs,
-            steps=tuple(ActionStep.from_dict(step) for step in value["steps"]),
+            steps=tuple(ActionStep.from_dict(step) for step in raw_steps),
             checkpoint=checkpoint,
             business_outcomes=tuple(
                 BusinessOutcome(
-                    code=str(item["code"]),
-                    description=str(item["description"]),
-                    detection_text=str(item["detection_text"]),
+                    code=item["code"],
+                    description=item["description"],
+                    detection_text=item["detection_text"],
                 )
-                for item in value.get("business_outcomes", [])
+                for item in raw_business_outcomes
             ),
-            created_at=str(value.get("created_at", "")),
+            created_at=created_at,
         )
         artifact.validate()
         return artifact

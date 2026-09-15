@@ -25,7 +25,7 @@ def test_capability_round_trips_without_runtime_values():
             "balance": OutputSpec(
                 "string",
                 "Displayed balance",
-                Locator("text", "balance-value"),
+                Locator("css", "#balance-value"),
             )
         },
         steps=(
@@ -36,7 +36,7 @@ def test_capability_round_trips_without_runtime_values():
                 "{{member_id}}",
             ),
             ActionStep("search", ActionType.CLICK, Locator("role", "button:Search")),
-            ActionStep("read", ActionType.EXTRACT, Locator("text", "balance-value"), "balance"),
+            ActionStep("read", ActionType.EXTRACT, Locator("css", "#balance-value"), "balance"),
         ),
         checkpoint=Checkpoint(
             CheckpointKind.TEXT_PRESENT,
@@ -85,6 +85,26 @@ def test_capability_normalizes_missing_contract_fields_to_value_error():
     )
     payload = json.loads(artifact.to_json())
     del payload["checkpoint"]
+
+    with pytest.raises(ValueError, match="invalid capability artifact"):
+        CapabilityArtifact.from_dict(payload)
+
+
+def test_capability_rejects_invalid_typed_step_and_parameter_fields():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={"member_id": ParameterSpec("string", "Member identifier")},
+        outputs={},
+        steps=(ActionStep("wait", ActionType.WAIT),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+    payload = json.loads(artifact.to_json())
+    payload["steps"][0]["timeout_ms"] = 1.9
+    payload["parameters"]["member_id"]["required"] = "false"
 
     with pytest.raises(ValueError, match="invalid capability artifact"):
         CapabilityArtifact.from_dict(payload)

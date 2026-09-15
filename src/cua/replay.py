@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 from typing import Any, Protocol
+from urllib.parse import quote
 
 from .evidence import EvidenceRecorder
 from .handoff import HandoffCoordinator
@@ -257,7 +258,7 @@ class ReplayRunner:
 
     def _run_step(self, step: ActionStep, outputs: dict[str, Any]) -> None:
         self.policy.check_step(step, confirmed=self.confirmed_risky)
-        value = _resolve_value(step.value, self.inputs)
+        value = _resolve_value(step.value, self.inputs, url=step.action is ActionType.NAVIGATE)
         if step.action is ActionType.NAVIGATE:
             if value is None:
                 raise InputValidationError(f"step {step.id} has no navigation URL")
@@ -425,7 +426,7 @@ def _coerce_output(output_type: str, value: str, name: str) -> Any:
 _PARAMETER = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 
 
-def _resolve_value(value: str | None, inputs: dict[str, Any]) -> str | None:
+def _resolve_value(value: str | None, inputs: dict[str, Any], *, url: bool = False) -> str | None:
     if value is None:
         return None
 
@@ -433,6 +434,6 @@ def _resolve_value(value: str | None, inputs: dict[str, Any]) -> str | None:
         name = match.group(1)
         if name not in inputs:
             raise InputValidationError(f"step references missing input: {name}")
-        return str(inputs[name])
+        return quote(str(inputs[name]), safe="") if url else str(inputs[name])
 
     return _PARAMETER.sub(replace, value)

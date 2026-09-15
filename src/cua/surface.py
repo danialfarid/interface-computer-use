@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Callable
-from urllib.parse import parse_qsl, urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from .models import ActionType, Locator
 from .policy import PolicyViolation
@@ -91,7 +91,6 @@ class BrowserSurface:
         self._blocked_navigation_error: Exception | None = None
         self._route_installed = False
         self._websocket_route_installed = False
-        self._worker_websocket_prefix: bytes | None = None
         self._sensitive_values: set[str] = set()
         self._page_error: str | None = None
         self.page.on("dialog", self._handle_dialog)
@@ -160,7 +159,6 @@ class BrowserSurface:
             route_prefixes = tuple(policy.allowed_route_prefixes)
             script = _websocket_guard_script(origins, route_prefixes)
             worker_script = _worker_guard_script()
-            self._worker_websocket_prefix = _worker_websocket_prefix(origins, route_prefixes).encode()
             self._context.add_init_script(script)
             self._context.add_init_script(worker_script)
             self.page.evaluate(script)
@@ -181,17 +179,7 @@ class BrowserSurface:
             if location:
                 self._navigation_guard(urljoin(request_url, location))
                 raise PolicyViolation("redirect responses are not permitted by the route allowlist")
-            if _is_worker_guard_request(request_url):
-                headers = dict(response.headers)
-                headers.pop("content-encoding", None)
-                headers.pop("content-length", None)
-                route.fulfill(
-                    status=response.status,
-                    headers=headers,
-                    body=(self._worker_websocket_prefix or b"") + response.body(),
-                )
-            else:
-                route.fulfill(response=response)
+            route.fulfill(response=response)
             return
         except Exception as exc:
             self._blocked_navigation_error = exc
@@ -248,6 +236,8 @@ class BrowserSurface:
         self._page_error = None
         if "websocket url is not allowlisted" in message.lower():
             raise PolicyViolation("WebSocket URL is not allowlisted")
+        if "disabled by policy" in message.lower() or "not allowlisted" in message.lower():
+            raise PolicyViolation(f"browser context was blocked by policy: {message}")
         raise SurfaceAppError(f"{action} produced a page error: {message}")
 
     def _raise_pending_dialog(self, action: str) -> None:
@@ -424,10 +414,6 @@ class BrowserSurface:
                 if locator is None:
                     raise SurfaceError("click requires a locator")
                 self.resolve(locator, timeout_ms).click(timeout=timeout_ms)
-                # Worker failures are reported to the owning page on the next
-                # browser turn; give asynchronous guard failures a bounded
-                # chance to surface before recording the action.
-                self.page.wait_for_timeout(100)
                 self.page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
             elif action is ActionType.FILL:
                 if locator is None or value is None:
@@ -455,6 +441,10 @@ class BrowserSurface:
             message = str(exc).lower()
             if "websocket url is not allowlisted" in message:
                 raise PolicyViolation("WebSocket URL is not allowlisted") from exc
+            if "not allowlisted" in message:
+                raise PolicyViolation(f"{action.value} was blocked by the allowlist: {exc}") from exc
+            if "disabled by policy" in message:
+                raise PolicyViolation(f"{action.value} was blocked by policy: {exc}") from exc
             if "dialog" in message or "confirmation" in message:
                 raise UnexpectedDialog(f"{action.value} was blocked by an unexpected dialog: {exc}") from exc
             if "application error" in message:
@@ -521,101 +511,24 @@ def _websocket_guard_script(origins: tuple[str, ...], route_prefixes: tuple[str,
 
 
 def _worker_guard_script() -> str:
-    """Tag HTTP workers so their source can receive the same socket guard."""
+    """Disable worker contexts that cannot share the page network guard."""
 
     return """
 (() => {
-  const markWorkerUrl = (url) => {
-    const target = new URL(url, window.location.href);
-    if (target.protocol === 'http:' || target.protocol === 'https:') {
-      target.searchParams.set('__cua_worker_guard', '1');
-      return target.href;
-    }
-    return url;
-  };
-  const reportWorkerError = (event) => {
-      if (String(event.message || '').toLowerCase().includes('websocket url is not allowlisted')) {
-        setTimeout(() => { throw new Error('WebSocket URL is not allowlisted'); }, 0);
-      }
-  };
-  const wrapWorker = (name) => {
+  const disableWorker = (name) => {
     const OriginalWorker = window[name];
     if (!OriginalWorker || OriginalWorker.__cuaGuarded) return;
     function GuardedWorker(url, options) {
-      const worker = options === undefined ? new OriginalWorker(markWorkerUrl(url)) :
-        new OriginalWorker(markWorkerUrl(url), options);
-      if (typeof worker.addEventListener === 'function') {
-        worker.addEventListener('error', reportWorkerError);
-      }
-      if (worker.port) {
-        worker.port.addEventListener('message', (event) => {
-          if (event.data && event.data.__cuaError) reportWorkerError(event.data);
-        });
-        worker.port.start();
-      }
-      return worker;
+      throw new Error(`${name} is disabled by policy`);
     }
     GuardedWorker.prototype = OriginalWorker.prototype;
     GuardedWorker.__cuaGuarded = true;
     window[name] = GuardedWorker;
   };
-  wrapWorker('Worker');
-  wrapWorker('SharedWorker');
+  disableWorker('Worker');
+  disableWorker('SharedWorker');
 })();
 """
-
-
-def _worker_websocket_prefix(origins: tuple[str, ...], route_prefixes: tuple[str, ...]) -> str:
-    return """
-(() => {
-  const allowedOrigins = %s;
-  const allowedPrefixes = %s;
-  const original = self.WebSocket;
-  if (!original || original.__cuaGuarded) return;
-  const isAllowed = (raw) => {
-    const parsed = new URL(raw, self.location.href);
-    const origin = parsed.protocol === 'wss:' ? `https://${parsed.host}` : `http://${parsed.host}`;
-    if (!allowedOrigins.includes(origin)) return false;
-    if (!allowedPrefixes.length) return true;
-    return allowedPrefixes.some((prefix) =>
-      prefix === '/' ? parsed.pathname === '/' :
-      (parsed.pathname === prefix || parsed.pathname.startsWith(prefix.replace(/\\/$/, '') + '/'))
-    );
-  };
-  const ports = [];
-  const rejectNestedWorkers = (name) => {
-    const Constructor = self[name];
-    if (!Constructor) return;
-    self[name] = function() {
-      throw new Error('nested workers are disabled by policy');
-    };
-  };
-  rejectNestedWorkers('Worker');
-  rejectNestedWorkers('SharedWorker');
-  if (typeof self.addEventListener === 'function') {
-    self.addEventListener('connect', (event) => {
-      for (const port of event.ports || []) {
-        ports.push(port);
-        port.start();
-      }
-    });
-  }
-  function GuardedWebSocket(url, protocols) {
-    if (!isAllowed(url)) {
-      for (const port of ports) port.postMessage({__cuaError: 'WebSocket URL is not allowlisted'});
-      throw new Error('WebSocket URL is not allowlisted');
-    }
-    return protocols === undefined ? new original(url) : new original(url, protocols);
-  }
-  GuardedWebSocket.prototype = original.prototype;
-  GuardedWebSocket.__cuaGuarded = true;
-  self.WebSocket = GuardedWebSocket;
-})();
-""" % (json.dumps(origins), json.dumps(route_prefixes))
-
-
-def _is_worker_guard_request(value: str) -> bool:
-    return any(key == "__cua_worker_guard" for key, _ in parse_qsl(urlsplit(value).query))
 
 
 def _websocket_policy_url(value: str) -> str:

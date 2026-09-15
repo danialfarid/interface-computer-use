@@ -75,6 +75,7 @@ class HandoffCoordinator:
         self._condition = threading.Condition()
         self._owner_thread_id = threading.get_ident()
         self._pending_actions: list[_PendingHumanAction] = []
+        self._deadlines: dict[str, float] = {}
         self.on_human_action: Callable[[ActionStep], None] | None = None
         self.on_human_output: Callable[[ActionStep, str], None] | None = None
         set_navigation_guard = getattr(self.surface, "set_navigation_guard", None)
@@ -251,13 +252,27 @@ class HandoffCoordinator:
             request = self.get(intervention_id)
             if request.state != HandoffState.HUMAN_CONTROL:
                 raise RuntimeError(f"intervention is {request.state}, not human_control")
-            request.state = HandoffState.RESUMED
+            deadline = self._deadlines.get(intervention_id)
+            if deadline is not None and time.monotonic() >= deadline:
+                operator = request.operator
+                self._expire_request(intervention_id)
+                expired = True
+            else:
+                request.state = HandoffState.RESUMED
+                self._deadlines.pop(intervention_id, None)
+                operator = request.operator
+                expired = False
             self._condition.notify_all()
+        if expired:
+            self.evidence.event("intervention_expired", intervention_id=intervention_id, operator=operator)
+            raise RuntimeError("intervention expired before control was returned")
         self.evidence.event("control_returned", intervention_id=intervention_id, operator=request.operator)
         return request
 
     def wait_for_resume(self, intervention_id: str, timeout_s: float = 300.0) -> bool:
         expires_at = time.monotonic() + timeout_s
+        with self._condition:
+            self._deadlines[intervention_id] = expires_at
         while True:
             self.process_pending_actions(intervention_id=intervention_id, expires_at=expires_at)
             with self._condition:
@@ -278,6 +293,7 @@ class HandoffCoordinator:
             if request.state not in {HandoffState.REQUESTED, HandoffState.HUMAN_CONTROL}:
                 return
             request.state = HandoffState.CLOSED
+            self._deadlines.pop(intervention_id, None)
             operator = request.operator
             retained: list[_PendingHumanAction] = []
             for item in self._pending_actions:

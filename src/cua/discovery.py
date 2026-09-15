@@ -197,6 +197,11 @@ class DiscoveryRunner:
                         )
                     except (UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError) as exc:
                         return self._surface_failure(f"checkpoint-{step_number}", exc)
+                    business = self._business_outcome(current)
+                    if business is not None:
+                        result = self._business_result(business)
+                        self.evidence.event("run_finished", result=result.to_dict())
+                        return result, None
                     if self._checkpoint_matches(current):
                         missing_outputs = sorted(set(self.template.output_descriptions) - set(self.output_sources))
                         if missing_outputs:
@@ -263,6 +268,11 @@ class DiscoveryRunner:
                 return self._failure(RunStatus.HARD_FAILURE, "max-steps", "POLICY_BLOCKED", str(exc))
             except (UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError) as exc:
                 return self._surface_failure("max-steps", exc)
+            business = self._business_outcome(observation)
+            if business is not None:
+                result = self._business_result(business)
+                self.evidence.event("run_finished", result=result.to_dict())
+                return result, None
             if self.handoff is None or self._handoff_used:
                 self.evidence.failure_snapshot(self.surface, "failure-max-steps")
                 return self._failure(
@@ -321,8 +331,8 @@ class DiscoveryRunner:
         if action.action is ActionType.EXTRACT:
             if locator is None or not action.output_name:
                 raise SurfaceError("extract requires target_id and output_name")
-            if locator.strategy == "text" and any(char.isdigit() for char in locator.value):
-                raise SurfaceError("refusing to persist a dynamic value as an output locator")
+            if locator.strategy == "text":
+                raise SurfaceError("refusing to persist a text output locator")
             output_name = self._declared_output_name(action.output_name)
             extract_step = ActionStep(
                 f"step-{step_number}-{action_number}",
@@ -387,6 +397,15 @@ class DiscoveryRunner:
                 return outcome
         return None
 
+    def _business_result(self, outcome: BusinessOutcome) -> RunResult:
+        return RunResult(
+            status=RunStatus.BUSINESS_OUTCOME,
+            run_id=self.evidence.run_id,
+            outcome_code=outcome.code,
+            message=outcome.description,
+            evidence_dir=str(self.evidence.directory),
+        )
+
     def _artifact(self) -> CapabilityArtifact:
         outputs = {}
         for name, locator in self.output_sources.items():
@@ -445,8 +464,7 @@ class DiscoveryRunner:
 
     def _validate_human_output(self, step: ActionStep, value: str) -> None:
         if step.target is not None and step.target.strategy == "text":
-            if any(char.isdigit() for char in step.target.value) or step.target.value.strip() == value.strip():
-                raise SurfaceError("refusing to persist a dynamic human output locator")
+            raise SurfaceError("refusing to persist a text human output locator")
 
     def _try_handoff(
         self,
@@ -486,13 +504,7 @@ class DiscoveryRunner:
                 return None
         business = self._business_outcome(observation)
         if business is not None:
-            result = RunResult(
-                status=RunStatus.BUSINESS_OUTCOME,
-                run_id=self.evidence.run_id,
-                outcome_code=business.code,
-                message=business.description,
-                evidence_dir=str(self.evidence.directory),
-            )
+            result = self._business_result(business)
             self.evidence.event("run_finished", result=result.to_dict())
             return result, None
         if not self._checkpoint_matches(observation):
