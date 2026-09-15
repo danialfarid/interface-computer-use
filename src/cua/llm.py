@@ -15,6 +15,42 @@ class LLMError(RuntimeError):
     """The model could not return a valid, policy-checkable decision."""
 
 
+DECISION_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "actions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": [item.value for item in ActionType]},
+                    "control_id": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "target_id": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "value": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "output_name": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "reason": {"type": "string"},
+                    "risk": {"type": "string", "enum": [item.value for item in RiskClass]},
+                },
+                "required": [
+                    "action",
+                    "control_id",
+                    "target_id",
+                    "value",
+                    "output_name",
+                    "reason",
+                    "risk",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "done": {"type": "boolean"},
+        "message": {"type": "string"},
+    },
+    "required": ["actions", "done", "message"],
+    "additionalProperties": False,
+}
+
+
 @dataclass(frozen=True)
 class AgentAction:
     action: ActionType
@@ -120,7 +156,7 @@ class OpenAICompatibleClient:
             "You operate a browser through a constrained action interface. "
             "Use only control_id and target_id values present in the observation. "
             "Take the smallest safe next action. Never invent selectors. "
-            "Return JSON only with this shape: "
+            "Return only the supplied JSON schema: "
             '{"actions":[{"action":"fill|click|press|extract|wait",'
             '"control_id":"...","target_id":"...","value":"...",'
             '"output_name":"...","reason":"...","risk":"safe|risky"}],'
@@ -132,7 +168,14 @@ class OpenAICompatibleClient:
             {
                 "model": self.model,
                 "temperature": 0,
-                "response_format": {"type": "json_object"},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "computer_use_decision",
+                        "strict": True,
+                        "schema": DECISION_JSON_SCHEMA,
+                    },
+                },
                 "messages": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
