@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from pathlib import Path
 import re
 from typing import Any
@@ -271,18 +270,15 @@ class BrowserSurface:
         try:
             return str(self.resolve(locator).inner_text(timeout=timeout_ms)).strip()
         except Exception as exc:
+            if "Timeout" in type(exc).__name__:
+                raise SurfaceTimeout(f"extract timed out: {exc}") from exc
             raise SurfaceError(f"extract failed for {locator}: {exc}") from exc
 
     def capture(self, directory: Path, stem: str) -> tuple[Path | None, Path]:
         directory.mkdir(parents=True, exist_ok=True)
-        screenshot = directory / f"{stem}.png" if os.environ.get("CUA_PERSIST_SCREENSHOTS") == "1" else None
         snapshot = directory / f"{stem}.txt"
-        if screenshot is not None:
-            # Opt-in only: screenshots can contain regulated data. The default
-            # evidence signal is the redacted DOM/accessibility text snapshot.
-            self.page.screenshot(path=str(screenshot), full_page=True)
         snapshot.write_text(redact_text(self.observe().text), encoding="utf-8")
-        return screenshot, snapshot
+        return None, snapshot
 
 
 def _quote_css(value: str) -> str:

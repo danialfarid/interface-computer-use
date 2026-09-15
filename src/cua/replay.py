@@ -140,10 +140,21 @@ class ReplayRunner:
         if step.action is ActionType.EXTRACT:
             if step.target is None or not step.value:
                 raise SurfaceError(f"extract step {step.id} is incomplete")
-            extracted = self.surface.extract(step.target, step.timeout_ms)
-            outputs[step.value] = extracted
-            self.evidence.event("extraction", step=step.id, name=step.value, value=extracted)
-            return
+            for attempt in range(self.max_retries + 1):
+                try:
+                    extracted = self.surface.extract(step.target, step.timeout_ms)
+                    outputs[step.value] = extracted
+                    self.evidence.event(
+                        "extraction", step=step.id, name=step.value, value=extracted, attempt=attempt + 1
+                    )
+                    return
+                except SurfaceTimeout:
+                    if attempt < self.max_retries:
+                        self.evidence.event(
+                            "recoverable", step=step.id, code="TRANSIENT_TIMEOUT", attempt=attempt + 1
+                        )
+                        continue
+                    raise
 
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):

@@ -14,13 +14,14 @@ from .evidence import EvidenceRecorder
 from .handoff import HandoffCoordinator, HandoffServer
 from .llm import LLMError, OpenAICompatibleClient
 from .models import CapabilityArtifact, RunStatus
-from .policy import GuardrailPolicy
+from .policy import GuardrailPolicy, PolicyViolation
 from .replay import ReplayRunner
 from .surface import BrowserSurface, SurfaceError
 from .templates import member_balance_template
 
 
 DEFAULT_URL = "http://127.0.0.1:8765/"
+DEFAULT_ORIGIN = "http://127.0.0.1:8765"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -122,10 +123,16 @@ def _run_discover(args: argparse.Namespace) -> int:
 def _run_replay(args: argparse.Namespace) -> int:
     artifact = CapabilityArtifact.from_dict(json.loads(args.artifact.read_text(encoding="utf-8")))
     target_url = artifact.target["url"]
+    if artifact.target.get("origin") != DEFAULT_ORIGIN:
+        raise ValueError(f"replay target origin must be the approved demo origin: {DEFAULT_ORIGIN}")
+    policy = GuardrailPolicy.local_demo(DEFAULT_ORIGIN)
+    try:
+        policy.check_url(target_url)
+    except PolicyViolation as exc:
+        raise ValueError(f"replay target is not an approved local demo URL: {target_url}") from exc
     demo_server = _ensure_demo_server(target_url)
     browser = BrowserSurface.open(target_url, headless=not args.headed)
     evidence = EvidenceRecorder(args.evidence_dir)
-    policy = GuardrailPolicy.local_demo(artifact.target["origin"])
     try:
         result = ReplayRunner(
             browser,

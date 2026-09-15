@@ -22,6 +22,7 @@ from .models import (
     RunStatus,
 )
 from .policy import ConfirmationRequired, GuardrailPolicy, PolicyViolation
+from .redaction import redact_text
 from .surface import SurfaceError, SurfaceObservation
 
 
@@ -130,6 +131,15 @@ class DiscoveryRunner:
                 if decision.done:
                     current = self.surface.observe()
                     if self._checkpoint_matches(current):
+                        missing_outputs = sorted(set(self.template.output_descriptions) - set(self.output_sources))
+                        if missing_outputs:
+                            self.evidence.failure_snapshot(self.surface, f"failure-outputs-{step_number}")
+                            return self._failure(
+                                RunStatus.HARD_FAILURE,
+                                f"decision-{step_number}",
+                                "OUTPUTS_MISSING",
+                                "discovery did not record required output(s): " + ", ".join(missing_outputs),
+                            )
                         artifact = self._artifact()
                         self.evidence.artifact_file(artifact)
                         result = RunResult(
@@ -140,6 +150,7 @@ class DiscoveryRunner:
                         )
                         self.evidence.event("run_finished", result=result.to_dict())
                         return result, artifact
+                    self.evidence.failure_snapshot(self.surface, f"failure-checkpoint-{step_number}")
                     return self._failure(
                         RunStatus.HARD_FAILURE,
                         f"decision-{step_number}",
@@ -208,7 +219,7 @@ class DiscoveryRunner:
                     ActionType.EXTRACT,
                     locator,
                     action.output_name,
-                    description=action.reason,
+                    description=_safe_description(action.reason, self.parameter_values),
                 )
             )
             return
@@ -224,7 +235,7 @@ class DiscoveryRunner:
             locator,
             value,
             risk=action.risk,
-            description=action.reason,
+            description=_safe_description(action.reason, self.parameter_values),
         )
         self.policy.check_step(step, confirmed=self.confirmed_risky)
         self.surface.perform(action.action, locator, action.value, step.timeout_ms)
@@ -286,3 +297,14 @@ def _parameterize(value: str | None, parameter_values: dict[str, str]) -> str | 
         if value == actual:
             return "{{" + name + "}}"
     return value
+
+
+def _safe_description(value: str, parameter_values: dict[str, str]) -> str:
+    return redact_text(_parameterize_text(value, parameter_values))
+
+
+def _parameterize_text(value: str, parameter_values: dict[str, str]) -> str:
+    result = value
+    for name, actual in parameter_values.items():
+        result = result.replace(actual, "{{" + name + "}}")
+    return result

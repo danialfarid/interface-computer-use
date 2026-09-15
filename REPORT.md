@@ -43,7 +43,7 @@ This is enough to make the control-transfer seam real while avoiding a full co-b
 
 `GuardrailPolicy` explicitly allowlists origins, route prefixes, and action types. Risk is part of every action step; risky actions require a separate confirmation flag, and a deployment policy can classify action types such as submit or transfer as risky. Human actions use the same policy checks. The demo capability has only read/search behavior and never reaches an irreversible action.
 
-Runtime values are parameterized before artifact persistence. Evidence passes through recursive redaction for identifier-like numbers, currency, emails, phones, tokens, and passwords. Dynamic text locators are rejected for outputs. Failure evidence defaults to a redacted DOM/accessibility snapshot; screenshots are opt-in via `CUA_PERSIST_SCREENSHOTS=1` because pixels can contain regulated data. The demo data is synthetic, and the README never requires real credentials or PII.
+Runtime values are parameterized before artifact persistence. Evidence passes through recursive redaction for identifier-like numbers, currency, emails, phones, tokens, and passwords. Dynamic text locators are rejected for outputs. Failure evidence is a redacted DOM/accessibility snapshot; screenshots are deliberately not persisted because pixels can contain regulated data. The demo data is synthetic, and the README never requires real credentials or PII. The replay CLI also derives its policy from the fixed approved demo origin rather than trusting an artifact to choose its own allowlist.
 
 # 7. Cuts
 

@@ -62,7 +62,7 @@ PYTHONPATH=src .venv/bin/python -m cua.cli replay \
   --evidence-dir evidence/not-found-replay
 ```
 
-The committed [example evidence](evidence/example/README.md) was made with the real local browser surface and an offline scripted decision client so the repository can be tested without a paid service. It is a smoke fixture, not a claim that the required provider-backed discovery has happened. Run `discover` with a key to create the genuine LLM evidence required by the brief.
+The committed [example evidence](evidence/example/README.md) was made with the real local browser surface and an offline scripted decision client so the repository can be tested without a paid service. The committed `evidence/live-discovery-2/` and `evidence/live-replay/` directories contain one redacted provider-backed discovery and its deterministic replay. No key or raw screenshot is persisted.
 
 ## Handoff
 

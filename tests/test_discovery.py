@@ -76,7 +76,15 @@ def test_discovery_records_parameterized_steps_and_output(tmp_path):
         [
             AgentDecision((AgentAction(ActionType.FILL, "control-0", value="1001", reason="enter member"),)),
             AgentDecision((AgentAction(ActionType.CLICK, "control-1", reason="search"),)),
-            AgentDecision((AgentAction(ActionType.EXTRACT, target_id="target-0", output_name="balance"),), done=True),
+            AgentDecision(
+                (AgentAction(
+                    ActionType.EXTRACT,
+                    target_id="target-0",
+                    output_name="balance",
+                    reason="read member 1001 balance",
+                ),),
+                done=True,
+            ),
         ]
     )
     runner = DiscoveryRunner(
@@ -137,3 +145,25 @@ def test_model_null_string_is_not_treated_as_a_target_id():
     )
     assert decision.actions[0].target_id is None
     assert decision.actions[0].value is None
+
+
+def test_discovery_requires_all_declared_outputs_before_success(tmp_path):
+    client = ScriptedDecisionClient(
+        [
+            AgentDecision((AgentAction(ActionType.FILL, "control-0", value="1001"),)),
+            AgentDecision((AgentAction(ActionType.CLICK, "control-1"),)),
+            AgentDecision((), done=True),
+        ]
+    )
+    result, artifact = DiscoveryRunner(
+        FakeSurface(),
+        client,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+        _template(),
+        parameter_values={"member_id": "1001"},
+    ).run("look up member 1001")
+
+    assert result.status is RunStatus.HARD_FAILURE
+    assert result.error_code == "OUTPUTS_MISSING"
+    assert artifact is None
