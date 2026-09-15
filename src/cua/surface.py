@@ -33,11 +33,26 @@ class Control:
 
 
 @dataclass(frozen=True)
+class ReadableTarget:
+    ephemeral_id: str
+    text: str
+    locator: Locator
+
+    def to_dict(self) -> dict[str, str | dict[str, Any]]:
+        return {
+            "id": self.ephemeral_id,
+            "text": self.text,
+            "locator": self.locator.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
 class SurfaceObservation:
     url: str
     title: str
     text: str
     controls: tuple[Control, ...]
+    readable_targets: tuple[ReadableTarget, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +60,7 @@ class SurfaceObservation:
             "title": self.title,
             "text": self.text,
             "controls": [control.to_dict() for control in self.controls],
+            "readable_targets": [target.to_dict() for target in self.readable_targets],
         }
 
 
@@ -93,7 +109,8 @@ class BrowserSurface:
             text = str(self.page.locator("body").inner_text())
             title = str(self.page.title())
             controls = tuple(self._controls())
-            return SurfaceObservation(self.url, title, text, controls)
+            readable_targets = tuple(self._readable_targets())
+            return SurfaceObservation(self.url, title, text, controls, readable_targets)
         except Exception as exc:
             raise SurfaceError(f"observe failed: {exc}") from exc
 
@@ -121,6 +138,40 @@ class BrowserSurface:
             locator = self._stable_locator(info)
             name = info["aria"] or info["label"] or info["text"]
             result.append(Control(f"control-{index}", info["role"], name, locator))
+        return result
+
+    def _readable_targets(self) -> list[ReadableTarget]:
+        handles = self.page.locator("h1,h2,h3,th,td,p,[id]")
+        result: list[ReadableTarget] = []
+        seen: set[tuple[str, str]] = set()
+        for index in range(handles.count()):
+            element = handles.nth(index)
+            info = element.evaluate(
+                """(el) => ({
+                  text: (el.innerText || '').trim(),
+                  id: el.id || '',
+                  tag: el.tagName.toLowerCase()
+                })"""
+            )
+            if not info["text"]:
+                continue
+            key = (info["id"], info["text"])
+            if key in seen:
+                continue
+            seen.add(key)
+            if info["id"]:
+                locator = Locator(
+                    "css",
+                    f"#{info['id']}",
+                    rationale="Stable author-provided id for a readable output target.",
+                )
+            else:
+                locator = Locator(
+                    "text",
+                    info["text"],
+                    rationale="Exact visible text fallback for legacy readable content.",
+                )
+            result.append(ReadableTarget(f"target-{index}", info["text"], locator))
         return result
 
     @staticmethod
@@ -158,6 +209,18 @@ class BrowserSurface:
         raise SurfaceError(f"control has no stable locator: {info}")
 
     def resolve(self, locator: Locator) -> Any:
+        errors: list[str] = []
+        for candidate in (locator, *locator.fallback):
+            try:
+                handle = self._resolve_one(candidate)
+                if handle.count() > 0:
+                    return handle
+                errors.append(f"{candidate.strategy}:{candidate.value} matched 0 elements")
+            except Exception as exc:
+                errors.append(f"{candidate.strategy}:{candidate.value}: {exc}")
+        raise SurfaceError(f"could not resolve locator {locator}: {'; '.join(errors)}")
+
+    def _resolve_one(self, locator: Locator) -> Any:
         try:
             if locator.strategy == "label":
                 return self.page.get_by_label(locator.value, exact=True)
