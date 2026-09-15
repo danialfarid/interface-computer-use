@@ -76,6 +76,10 @@ class HandoffCoordinator:
         self._owner_thread_id = threading.get_ident()
         self._pending_actions: list[_PendingHumanAction] = []
         self.on_human_action: Callable[[ActionStep], None] | None = None
+        self.on_human_output: Callable[[ActionStep, str], None] | None = None
+        set_navigation_guard = getattr(self.surface, "set_navigation_guard", None)
+        if callable(set_navigation_guard):
+            set_navigation_guard(self.policy.check_url)
 
     def create_request(
         self,
@@ -181,12 +185,18 @@ class HandoffCoordinator:
             raise RuntimeError("human must hold control before acting")
         self.policy.check_step(pending.step, confirmed=pending.confirmed)
         check_action_destination(self.policy, self.surface, pending.step)
-        self.surface.perform(
-            pending.step.action,
-            pending.step.target,
-            pending.step.value,
-            pending.step.timeout_ms,
-        )
+        extracted: str | None = None
+        if pending.step.action is ActionType.EXTRACT:
+            if pending.step.target is None:
+                raise SurfaceError("human extract requires a target")
+            extracted = self.surface.extract(pending.step.target, pending.step.timeout_ms)
+        else:
+            self.surface.perform(
+                pending.step.action,
+                pending.step.target,
+                pending.step.value,
+                pending.step.timeout_ms,
+            )
         self.policy.check_url(self.surface.url)
         action = pending.step.to_dict()
         request.human_actions.append(action)
@@ -195,9 +205,12 @@ class HandoffCoordinator:
             intervention_id=pending.intervention_id,
             operator=request.operator,
             step=action,
+            extracted_value=extracted,
         )
         if self.on_human_action is not None:
             self.on_human_action(pending.step)
+        if extracted is not None and self.on_human_output is not None:
+            self.on_human_output(pending.step, extracted)
 
     def resume(self, intervention_id: str) -> InterventionRequest:
         with self._condition:

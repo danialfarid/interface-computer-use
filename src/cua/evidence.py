@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 import uuid
 
-from .redaction import redact_value
+from .redaction import redact_artifact_payload, redact_value
 
 
 class EvidenceRecorder:
@@ -37,7 +37,8 @@ class EvidenceRecorder:
         """Persist an artifact after the caller has built its typed contract."""
 
         path = self.directory / "artifact.json"
-        path.write_text(artifact.to_json(), encoding="utf-8")
+        payload = redact_artifact_payload(artifact.to_dict())
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return path
 
     def failure_snapshot(self, surface: Any, label: str) -> dict[str, str]:

@@ -93,7 +93,7 @@ After taking control, the operator must complete or repair the blocked step in t
 - `src/cua/replay.py` - model-free deterministic executor and outcome taxonomy.
 - `src/cua/handoff.py` - pause, ownership transfer, same-session operator actions, and resume.
 - `src/cua/policy.py` and `src/cua/redaction.py` - allowlist, risk confirmation, and persistence-boundary safety.
-- `src/cua/demo_app.py` - local synthetic target with search, detail, and not-found states.
+- `src/cua/demo_app.py` - local synthetic target with search, detail, not-found, and explicit runtime-state fixtures.
 - `schemas/capability.schema.json` - reviewable JSON Schema for the saved artifact.
 - `REPORT.md` - design decisions, trade-offs, heterogeneity story, safety model, and cuts.
 - `evidence/` - redacted run evidence and saved artifacts.

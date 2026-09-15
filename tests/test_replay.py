@@ -267,3 +267,56 @@ def test_replay_can_resume_after_same_session_human_takeover(tmp_path):
     assert not operator_errors
     assert result.status is RunStatus.SUCCESS
     assert coordinator.list_requests()[0].state is HandoffState.RESUMED
+
+
+def test_replay_handoff_can_supply_a_failed_extraction(tmp_path):
+    class FailingExtractionSurface(FakeReplaySurface):
+        def __init__(self):
+            super().__init__()
+            self.failures_left = 3
+
+        def extract(self, locator, timeout_ms=5000):
+            if self.failures_left:
+                self.failures_left -= 1
+                raise SurfaceTimeout("balance was temporarily unavailable")
+            return super().extract(locator, timeout_ms)
+
+    surface = FailingExtractionSurface()
+    coordinator = HandoffCoordinator(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path / "handoff"),
+    )
+    operator_errors = []
+
+    def operator():
+        try:
+            while not coordinator.list_requests():
+                time.sleep(0.01)
+            request = coordinator.list_requests()[0]
+            coordinator.take_control(request.intervention_id, "reviewer")
+            coordinator.record_human_action(
+                request.intervention_id,
+                ActionStep("human-read", ActionType.EXTRACT, Locator("css", "#balance-value"), "balance"),
+            )
+            coordinator.resume(request.intervention_id)
+        except Exception as exc:
+            operator_errors.append(exc)
+
+    worker = threading.Thread(target=operator)
+    worker.start()
+    result = ReplayRunner(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path / "run"),
+        artifact(),
+        inputs={"member_id": "1001"},
+        handoff=coordinator,
+        handoff_wait_s=2,
+    ).run()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert not operator_errors
+    assert result.status is RunStatus.SUCCESS, result.to_dict()
+    assert result.outputs == {"balance": "$1,240.50"}

@@ -93,6 +93,19 @@ def runtime_page(state: str) -> bytes:
             <button id="confirm-action" onclick="confirm('Confirm this action?')">Continue</button>
             """,
         ),
+        "hostile": (
+            "Hostile navigation fixtures",
+            """
+            <h2>Hostile navigation fixtures</h2>
+            <button id="js-nav" onclick="location.href='/admin'">Script navigation</button>
+            <form method="get" action="/member">
+              <button id="form-nav" type="submit" formaction="/admin">Form override</button>
+            </form>
+            <form method="get" action="/admin">
+              <input id="enter-nav" aria-label="Enter navigation">
+            </form>
+            """,
+        ),
     }
     title, body = pages.get(state, ("Not found", "<h2>Not found</h2>"))
     return _page(title, body)

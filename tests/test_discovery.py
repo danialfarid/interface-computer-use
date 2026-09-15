@@ -1,15 +1,21 @@
 from pathlib import Path
+from dataclasses import replace
+import threading
+import time
 
 from cua.discovery import DiscoveryRunner, DiscoveryTemplate, _parameterize_text
 from cua.evidence import EvidenceRecorder
+from cua.handoff import HandoffCoordinator
 from cua.llm import AgentAction, AgentDecision, ScriptedDecisionClient
 from cua.models import (
+    ActionStep,
     ActionType,
     BusinessOutcome,
     Checkpoint,
     CheckpointKind,
     Locator,
     ParameterSpec,
+    RiskClass,
     RunStatus,
 )
 from cua.policy import GuardrailPolicy
@@ -100,6 +106,7 @@ def test_discovery_records_parameterized_steps_and_output(tmp_path):
 
     assert result.status is RunStatus.SUCCESS
     assert artifact is not None
+    assert surface.actions[1][2] == "1001"
     assert artifact.steps[1].value == "{{member_id}}" or artifact.steps[0].value == "{{member_id}}"
     assert artifact.outputs["balance"].source.strategy == "css"
     assert "1001" not in artifact.to_json()
@@ -198,3 +205,120 @@ def test_discovery_maps_model_output_name_to_single_declared_output(tmp_path):
 def test_parameterization_does_not_replace_short_numeric_ids_inside_other_values():
     assert _parameterize_text("/member?member=1001", {"member_id": "1001"}) == "/member?member={{member_id}}"
     assert _parameterize_text("/member?member=1001", {"member_id": "10"}) == "/member?member=1001"
+
+
+def test_human_discovery_action_is_parameterized_before_artifact_recording(tmp_path):
+    surface = FakeSurface()
+    coordinator = HandoffCoordinator(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+    )
+    runner = DiscoveryRunner(
+        surface,
+        ScriptedDecisionClient([]),
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path / "discovery"),
+        _template(),
+        parameter_values={"member_id": "1001"},
+        handoff=coordinator,
+    )
+    request = coordinator.create_request(
+        goal="goal", capability_id="cap", step="step", reason="stuck", observation=surface.observe()
+    )
+    coordinator.take_control(request.intervention_id, "reviewer")
+    coordinator.record_human_action(
+        request.intervention_id,
+        ActionStep("human-fill", ActionType.FILL, Locator("label", "Member ID"), "1001"),
+    )
+
+    assert runner.recorded_steps[0].value == "{{member_id}}"
+
+
+def test_discovery_escalates_a_blocked_risky_action_to_human_control(tmp_path):
+    surface = FakeSurface()
+    policy = GuardrailPolicy(
+        allowed_origins=("http://127.0.0.1:8765",),
+        risky_actions=frozenset({ActionType.CLICK}),
+    )
+    coordinator = HandoffCoordinator(surface, policy, EvidenceRecorder(tmp_path / "handoff"))
+    client = ScriptedDecisionClient(
+        [
+            AgentDecision(
+                (AgentAction(ActionType.CLICK, "control-1", risk=RiskClass.RISKY),)
+            ),
+            AgentDecision(
+                (AgentAction(ActionType.EXTRACT, target_id="target-0", output_name="balance"),),
+                done=True,
+            ),
+        ]
+    )
+    operator_errors = []
+
+    def operator():
+        try:
+            while not coordinator.list_requests():
+                time.sleep(0.01)
+            request = coordinator.list_requests()[0]
+            coordinator.take_control(request.intervention_id, "reviewer")
+            coordinator.record_human_action(
+                request.intervention_id,
+                ActionStep("human-search", ActionType.CLICK, Locator("role", "button:Search")),
+                confirmed=True,
+            )
+            coordinator.resume(request.intervention_id)
+        except Exception as exc:
+            operator_errors.append(exc)
+
+    worker = threading.Thread(target=operator)
+    worker.start()
+    result, artifact = DiscoveryRunner(
+        surface,
+        client,
+        policy,
+        EvidenceRecorder(tmp_path / "discovery"),
+        _template(),
+        parameter_values={"member_id": "1001"},
+        handoff=coordinator,
+        handoff_wait_s=2,
+    ).run("look up member 1001")
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert not operator_errors
+    assert result.status is RunStatus.SUCCESS
+    assert artifact is not None
+    assert artifact.steps[0].id == "human-search"
+
+
+def test_discovery_does_not_persist_sensitive_target_query_values(tmp_path):
+    template = replace(
+        _template(),
+        target={
+            "url": "http://127.0.0.1:8765/?token=SyntheticSecret",
+            "origin": "http://127.0.0.1:8765",
+        },
+    )
+    client = ScriptedDecisionClient(
+        [
+            AgentDecision((AgentAction(ActionType.FILL, "control-0", value="1001"),)),
+            AgentDecision((AgentAction(ActionType.CLICK, "control-1"),)),
+            AgentDecision(
+                (AgentAction(ActionType.EXTRACT, target_id="target-0", output_name="balance"),),
+                done=True,
+            ),
+        ]
+    )
+
+    result, artifact = DiscoveryRunner(
+        FakeSurface(),
+        client,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+        template,
+        parameter_values={"member_id": "1001"},
+    ).run("look up member 1001")
+
+    assert result.status is RunStatus.SUCCESS
+    assert artifact is not None
+    assert "SyntheticSecret" not in artifact.to_json()

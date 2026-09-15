@@ -196,6 +196,8 @@ class CapabilityArtifact:
             raise ValueError("capability_id and name are required")
         if not self.target.get("url") or not self.target.get("origin"):
             raise ValueError("target must include url and origin")
+        if not self.checkpoint.value or not self.checkpoint.description:
+            raise ValueError("checkpoint value and description are required")
         for name, spec in self.parameters.items():
             if spec.type not in {"string", "integer"}:
                 raise ValueError(f"unsupported parameter type for {name}: {spec.type}")

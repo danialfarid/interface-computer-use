@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 
 from .models import ActionType, Locator
 from .redaction import redact_text
@@ -84,6 +84,9 @@ class BrowserSurface:
         self._context = context
         self.page = page
         self._unexpected_dialog: str | None = None
+        self._navigation_guard: Callable[[str], None] | None = None
+        self._blocked_navigation_error: Exception | None = None
+        self._route_installed = False
         self.page.on("dialog", self._handle_dialog)
 
     @classmethod
@@ -115,6 +118,24 @@ class BrowserSurface:
         self._browser.close()
         self._playwright.stop()
 
+    def set_navigation_guard(self, guard: Callable[[str], None]) -> None:
+        self._navigation_guard = guard
+        if not self._route_installed:
+            self._context.route("**/*", self._route_request)
+            self._route_installed = True
+
+    def _route_request(self, route: Any, request: Any) -> None:
+        if self._navigation_guard is None or not request.is_navigation_request():
+            route.continue_()
+            return
+        try:
+            self._navigation_guard(str(request.url))
+        except Exception as exc:
+            self._blocked_navigation_error = exc
+            route.abort(error_code="blockedbyclient")
+            return
+        route.continue_()
+
     def observe(self) -> SurfaceObservation:
         try:
             text = str(self.page.locator("body").inner_text())
@@ -143,6 +164,11 @@ class BrowserSurface:
         message = self._unexpected_dialog
         self._unexpected_dialog = None
         raise UnexpectedDialog(f"{action} encountered an unexpected browser dialog: {message}")
+
+    def _take_blocked_navigation(self) -> Exception | None:
+        error = self._blocked_navigation_error
+        self._blocked_navigation_error = None
+        return error
 
     def _controls(self) -> list[Control]:
         handles = self.page.locator("a,button,input,select,textarea,[role]")
@@ -278,6 +304,7 @@ class BrowserSurface:
                 """(el) => {
                   const anchor = el.closest('a');
                   if (anchor && anchor.href) return anchor.href;
+                  if (el.formAction) return el.formAction;
                   const form = el.closest('form') || el.form;
                   if (form) return new URL(form.getAttribute('action') || location.href, location.href).href;
                   return null;
@@ -309,13 +336,20 @@ class BrowserSurface:
                     raise SurfaceError("press requires a locator and key")
                 self.resolve(locator, timeout_ms).press(value, timeout=timeout_ms)
             elif action is ActionType.WAIT:
-                self.page.wait_for_timeout(int(value or "250"))
+                delay_ms = int(value or "250")
+                if delay_ms < 0 or delay_ms > timeout_ms:
+                    raise SurfaceTimeout(
+                        f"wait duration {delay_ms}ms exceeds declared timeout {timeout_ms}ms"
+                    )
+                self.page.wait_for_timeout(delay_ms)
             else:
                 raise SurfaceError(f"unsupported interactive action: {action.value}")
-            self._raise_pending_dialog(action.value)
         except SurfaceError:
             raise
         except Exception as exc:
+            blocked = self._take_blocked_navigation()
+            if blocked is not None:
+                raise blocked
             message = str(exc).lower()
             if "dialog" in message or "confirmation" in message:
                 raise UnexpectedDialog(f"{action.value} was blocked by an unexpected dialog: {exc}") from exc
@@ -324,6 +358,13 @@ class BrowserSurface:
             if "Timeout" in type(exc).__name__:
                 raise SurfaceTimeout(f"{action.value} timed out: {exc}") from exc
             raise SurfaceError(f"{action.value} failed: {exc}") from exc
+        self._raise_blocked_navigation()
+        self._raise_pending_dialog(action.value)
+
+    def _raise_blocked_navigation(self) -> None:
+        blocked = self._take_blocked_navigation()
+        if blocked is not None:
+            raise blocked
 
     def extract(self, locator: Locator, timeout_ms: int = 5_000) -> str:
         try:
@@ -336,7 +377,8 @@ class BrowserSurface:
     def capture(self, directory: Path, stem: str) -> tuple[Path | None, Path]:
         directory.mkdir(parents=True, exist_ok=True)
         snapshot = directory / f"{stem}.txt"
-        snapshot.write_text(redact_text(self.observe().text), encoding="utf-8")
+        text = str(self.page.locator("body").inner_text())
+        snapshot.write_text(redact_text(text), encoding="utf-8")
         return None, snapshot
 
 

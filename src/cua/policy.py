@@ -69,7 +69,7 @@ def check_action_destination(policy: GuardrailPolicy, surface: object, step: Act
             return
         policy.check_url(step.value)
         return
-    if step.action is not ActionType.CLICK or step.target is None:
+    if step.action not in {ActionType.CLICK, ActionType.PRESS} or step.target is None:
         return
     preview = getattr(surface, "preview_url", None)
     if callable(preview):

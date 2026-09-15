@@ -95,6 +95,7 @@ def test_browser_surface_replay_reports_application_error(tmp_path, demo_origin)
 
     assert result.status is RunStatus.HARD_FAILURE
     assert result.error_code == "APP_ERROR"
+    assert (Path(result.evidence_dir) / "failure-observe.txt").exists()
 
 
 def test_browser_surface_reports_unexpected_confirmation_dialog(tmp_path, demo_origin):
@@ -112,3 +113,43 @@ def test_browser_surface_reports_unexpected_confirmation_dialog(tmp_path, demo_o
 
     assert result.status is RunStatus.HARD_FAILURE
     assert result.error_code == "UNEXPECTED_DIALOG"
+
+
+@pytest.mark.parametrize(
+    ("action", "locator", "value"),
+    [
+        (ActionType.CLICK, Locator("css", "#js-nav"), None),
+        (ActionType.CLICK, Locator("css", "#form-nav"), None),
+        (ActionType.PRESS, Locator("css", "#enter-nav"), "Enter"),
+    ],
+)
+def test_browser_surface_blocks_forbidden_navigation_before_request(
+    tmp_path, demo_origin, action, locator, value
+):
+    surface = BrowserSurface.open(f"{demo_origin}/runtime/hostile")
+    artifact = CapabilityArtifact(
+        capability_id="hostile-navigation",
+        name="Hostile navigation fixture",
+        description="Verify the browser route guard.",
+        surface_kind="browser",
+        target={"url": f"{demo_origin}/runtime/hostile", "origin": demo_origin},
+        parameters={},
+        outputs={},
+        steps=(ActionStep("navigate", action, locator, value),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "Hostile navigation", "fixture visible"),
+    )
+    try:
+        result = ReplayRunner(
+            surface,
+            GuardrailPolicy.local_demo(demo_origin),
+            EvidenceRecorder(tmp_path),
+            artifact,
+            inputs={},
+        ).run()
+    finally:
+        current_url = surface.url
+        surface.close()
+
+    assert result.status is RunStatus.HARD_FAILURE
+    assert result.error_code == "POLICY_BLOCKED"
+    assert "/admin" not in current_url

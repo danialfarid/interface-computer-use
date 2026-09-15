@@ -34,5 +34,20 @@ def member_balance_template(target_url: str) -> DiscoveryTemplate:
                 "The portal reported that no member matched the supplied identifier.",
                 "Member not found",
             ),
+            BusinessOutcome(
+                "VALIDATION_ERROR",
+                "The portal rejected the supplied member identifier.",
+                "Validation error",
+            ),
+            BusinessOutcome(
+                "PERMISSION_DENIED",
+                "The operator is not permitted to view this member.",
+                "Permission denied",
+            ),
+            BusinessOutcome(
+                "SESSION_EXPIRED",
+                "The portal session expired before the lookup completed.",
+                "Session expired",
+            ),
         ),
     )

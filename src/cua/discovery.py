@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import re
 from typing import Protocol
@@ -22,7 +22,7 @@ from .models import (
     RunStatus,
 )
 from .policy import ConfirmationRequired, GuardrailPolicy, PolicyViolation, check_action_destination
-from .redaction import redact_text
+from .redaction import redact_text, redact_url
 from .surface import SurfaceAppError, SurfaceError, SurfaceObservation, SurfaceTimeout, UnexpectedDialog
 
 
@@ -84,8 +84,12 @@ class DiscoveryRunner:
         self.handoff_wait_s = handoff_wait_s
         self.recorded_steps: list[ActionStep] = []
         self.output_sources: dict[str, Locator] = {}
+        self._handoff_used = False
+        set_navigation_guard = getattr(self.surface, "set_navigation_guard", None)
+        if callable(set_navigation_guard):
+            set_navigation_guard(self.policy.check_url)
         if self.handoff is not None:
-            self.handoff.on_human_action = self.recorded_steps.append
+            self.handoff.on_human_action = self._record_human_action
 
     def run(self, goal: str) -> tuple[RunResult, CapabilityArtifact | None]:
         self.evidence.event("run_started", mode="discovery", goal=goal, target=self.template.target)
@@ -100,13 +104,14 @@ class DiscoveryRunner:
             return self._failure(RunStatus.HARD_FAILURE, "navigate", "START_FAILED", str(exc))
 
         step_number = 0
-        handoff_used = False
         while True:
             while step_number < self.max_steps:
                 step_number += 1
                 try:
                     observation = self.surface.observe()
                 except (UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError) as exc:
+                    if self._try_handoff(goal, f"observation-{step_number}", str(exc), None):
+                        continue
                     return self._surface_failure(f"observation-{step_number}", exc)
                 self.evidence.event("observation", step=step_number, observation=observation.to_dict())
                 business = self._business_outcome(observation)
@@ -126,18 +131,25 @@ class DiscoveryRunner:
                     for action_number, action in enumerate(decision.actions, start=1):
                         self._execute_action(step_number, action_number, action, observation)
                 except LLMError as exc:
+                    if self._try_handoff(goal, f"decision-{step_number}", str(exc), observation):
+                        continue
                     return self._failure(RunStatus.HARD_FAILURE, f"decision-{step_number}", "LLM_ERROR", str(exc))
                 except (PolicyViolation, ConfirmationRequired) as exc:
+                    if self._try_handoff(goal, f"step-{step_number}", str(exc), observation):
+                        continue
                     return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "POLICY_BLOCKED", str(exc))
                 except UnexpectedDialog as exc:
-                    self.evidence.failure_snapshot(self.surface, f"failure-step-{step_number}")
-                    return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "UNEXPECTED_DIALOG", str(exc))
+                    if self._try_handoff(goal, f"step-{step_number}", str(exc), observation):
+                        continue
+                    return self._surface_failure(f"step-{step_number}", exc)
                 except SurfaceAppError as exc:
-                    self.evidence.failure_snapshot(self.surface, f"failure-step-{step_number}")
-                    return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "APP_ERROR", str(exc))
+                    if self._try_handoff(goal, f"step-{step_number}", str(exc), observation):
+                        continue
+                    return self._surface_failure(f"step-{step_number}", exc)
                 except SurfaceError as exc:
-                    self.evidence.failure_snapshot(self.surface, f"failure-step-{step_number}")
-                    return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "SURFACE_ERROR", str(exc))
+                    if self._try_handoff(goal, f"step-{step_number}", str(exc), observation):
+                        continue
+                    return self._surface_failure(f"step-{step_number}", exc)
 
                 if decision.done:
                     try:
@@ -154,7 +166,16 @@ class DiscoveryRunner:
                                 "OUTPUTS_MISSING",
                                 "discovery did not record required output(s): " + ", ".join(missing_outputs),
                             )
-                        artifact = self._artifact()
+                        try:
+                            artifact = self._artifact()
+                            artifact.validate()
+                        except ValueError as exc:
+                            return self._failure(
+                                RunStatus.HARD_FAILURE,
+                                f"decision-{step_number}",
+                                "INVALID_ARTIFACT",
+                                str(exc),
+                            )
                         self.evidence.artifact_file(artifact)
                         result = RunResult(
                             status=RunStatus.SUCCESS,
@@ -176,7 +197,7 @@ class DiscoveryRunner:
                 observation = self.surface.observe()
             except (UnexpectedDialog, SurfaceAppError, SurfaceTimeout, SurfaceError) as exc:
                 return self._surface_failure("max-steps", exc)
-            if self.handoff is None or handoff_used:
+            if self.handoff is None or self._handoff_used:
                 self.evidence.failure_snapshot(self.surface, "failure-max-steps")
                 return self._failure(
                     RunStatus.ESCALATED,
@@ -201,7 +222,7 @@ class DiscoveryRunner:
                     "human intervention was not completed before the wait expired",
                 )
             self.evidence.event("run_resumed", intervention_id=request.intervention_id)
-            handoff_used = True
+            self._handoff_used = True
             step_number = 0
 
     def _execute_action(
@@ -237,24 +258,34 @@ class DiscoveryRunner:
                 description=_safe_description(action.reason, self.parameter_values),
             )
             self.policy.check_step(extract_step, confirmed=self.confirmed_risky)
+            previous_source = self.output_sources.get(output_name)
+            if previous_source is not None and previous_source != locator:
+                raise SurfaceError(
+                    f"output {output_name} was already recorded from a different locator"
+                )
             self.output_sources[output_name] = locator
             value = self.surface.extract(locator)
             self.evidence.event("extraction", name=output_name, value=value)
             self.recorded_steps.append(extract_step)
             return
 
-        value = _parameterize_text(action.value, self.parameter_values) if action.value is not None else None
+        runtime_value = action.value
+        artifact_value = _parameterize_text(runtime_value, self.parameter_values) if runtime_value is not None else None
+        if action.action is ActionType.NAVIGATE:
+            if runtime_value is None:
+                raise SurfaceError("navigate requires a value")
+            self.policy.check_url(runtime_value)
         step = ActionStep(
             f"step-{step_number}-{action_number}",
             action.action,
             locator,
-            value,
+            artifact_value,
             risk=action.risk,
             description=_safe_description(action.reason, self.parameter_values),
         )
         self.policy.check_step(step, confirmed=self.confirmed_risky)
         check_action_destination(self.policy, self.surface, step)
-        self.surface.perform(action.action, locator, value, step.timeout_ms)
+        self.surface.perform(action.action, locator, runtime_value, step.timeout_ms)
         self.policy.check_url(self.surface.url)
         self.recorded_steps.append(step)
         self.evidence.event("action", step=step.to_dict(), reason=action.reason)
@@ -285,7 +316,10 @@ class DiscoveryRunner:
             name=self.template.name,
             description=self.template.description,
             surface_kind=self.surface.kind,
-            target=self.template.target,
+            target={
+                **self.template.target,
+                "url": redact_url(self.template.target["url"]),
+            },
             parameters=self.template.parameters,
             outputs=outputs,
             steps=tuple(self.recorded_steps),
@@ -299,6 +333,53 @@ class DiscoveryRunner:
         if len(self.template.output_descriptions) == 1:
             return next(iter(self.template.output_descriptions))
         raise SurfaceError(f"extract output is not declared: {name}")
+
+    def _record_human_action(self, step: ActionStep) -> None:
+        if step.action is ActionType.EXTRACT:
+            output_name = self._declared_output_name(step.value or "")
+            if step.target is None:
+                raise SurfaceError("human extract requires a target")
+            self.output_sources[output_name] = step.target
+            recorded = replace(step, value=output_name)
+        else:
+            recorded = replace(
+                step,
+                value=(
+                    _parameterize_text(step.value, self.parameter_values)
+                    if step.value is not None
+                    else None
+                ),
+                description=_safe_description(step.description, self.parameter_values),
+            )
+        self.recorded_steps.append(recorded)
+
+    def _try_handoff(
+        self,
+        goal: str,
+        step: str,
+        reason: str,
+        observation: SurfaceObservation | None,
+    ) -> bool:
+        if self.handoff is None or self._handoff_used:
+            return False
+        if observation is None:
+            try:
+                observation = self.surface.observe()
+            except SurfaceError:
+                observation = SurfaceObservation(self.surface.url, "", "", ())
+        request = self.handoff.create_request(
+            goal=goal,
+            capability_id=self.template.capability_id,
+            step=step,
+            reason=reason,
+            observation=observation,
+        )
+        self.evidence.event("run_paused", intervention_id=request.intervention_id)
+        if not self.handoff.wait_for_resume(request.intervention_id, self.handoff_wait_s):
+            return False
+        self.evidence.event("run_resumed", intervention_id=request.intervention_id)
+        self._handoff_used = True
+        return True
 
     def _failure(self, status: RunStatus, step: str, code: str, message: str) -> tuple[RunResult, None]:
         result = RunResult(

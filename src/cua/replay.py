@@ -60,6 +60,12 @@ class ReplayRunner:
         self.handoff = handoff
         self.handoff_wait_s = handoff_wait_s
         self._handoff_used = False
+        self._operator_outputs: dict[str, Any] = {}
+        set_navigation_guard = getattr(self.surface, "set_navigation_guard", None)
+        if callable(set_navigation_guard):
+            set_navigation_guard(self.policy.check_url)
+        if self.handoff is not None:
+            self.handoff.on_human_output = self._record_human_output
 
     def run(self) -> RunResult:
         self.evidence.event(
@@ -98,6 +104,7 @@ class ReplayRunner:
 
         outputs: dict[str, Any] = {}
         for step in self.artifact.steps:
+            outputs.update(self._operator_outputs)
             try:
                 observation = self.surface.observe()
             except SurfaceError as exc:
@@ -140,10 +147,12 @@ class ReplayRunner:
                     continue
                 return self._surface_failure(step, exc)
 
+        outputs.update(self._operator_outputs)
         try:
             observation = self.surface.observe()
         except SurfaceError as exc:
             if self._try_handoff(ActionStep("final-observation", ActionType.WAIT), exc):
+                outputs.update(self._operator_outputs)
                 try:
                     observation = self.surface.observe()
                 except SurfaceError as second_exc:
@@ -317,6 +326,15 @@ class ReplayRunner:
         self.evidence.event("run_resumed", intervention_id=request.intervention_id)
         self._handoff_used = True
         return True
+
+    def _record_human_output(self, step: ActionStep, value: str) -> None:
+        if step.value not in self.artifact.outputs:
+            raise SurfaceError(f"human extract names undeclared output: {step.value}")
+        self._operator_outputs[step.value] = _coerce_output(
+            self.artifact.outputs[step.value].type,
+            value,
+            step.value,
+        )
 
     def _finish(self, result: RunResult) -> RunResult:
         self.evidence.event("run_finished", result=result.to_dict())

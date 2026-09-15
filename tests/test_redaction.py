@@ -13,11 +13,18 @@ def test_redaction_handles_bearer_and_key_formats_without_crashing():
 
 
 def test_redaction_masks_named_sensitive_scalar_values_including_numbers():
-    value = {"member_id": 1001, "name": "Jane Example", "balance": "$85.19", "count": 2}
+    value = {
+        "member_id": 1001,
+        "name": "Jane Example",
+        "address": "12 Oak Lane",
+        "balance": "$85.19",
+        "count": 2,
+    }
 
     redacted = redact_value("payload", value)
 
     assert redacted["member_id"] == "<REDACTED>"
     assert redacted["name"] == "<REDACTED>"
+    assert redacted["address"] == "<REDACTED>"
     assert redacted["balance"] == "<REDACTED>"
     assert redacted["count"] == 2
