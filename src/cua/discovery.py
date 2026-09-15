@@ -23,7 +23,7 @@ from .models import (
 )
 from .policy import ConfirmationRequired, GuardrailPolicy, PolicyViolation
 from .redaction import redact_text
-from .surface import SurfaceError, SurfaceObservation
+from .surface import SurfaceAppError, SurfaceError, SurfaceObservation, UnexpectedDialog
 
 
 class DiscoverySurface(Protocol):
@@ -124,6 +124,12 @@ class DiscoveryRunner:
                     return self._failure(RunStatus.HARD_FAILURE, f"decision-{step_number}", "LLM_ERROR", str(exc))
                 except (PolicyViolation, ConfirmationRequired) as exc:
                     return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "POLICY_BLOCKED", str(exc))
+                except UnexpectedDialog as exc:
+                    self.evidence.failure_snapshot(self.surface, f"failure-step-{step_number}")
+                    return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "UNEXPECTED_DIALOG", str(exc))
+                except SurfaceAppError as exc:
+                    self.evidence.failure_snapshot(self.surface, f"failure-step-{step_number}")
+                    return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "APP_ERROR", str(exc))
                 except SurfaceError as exc:
                     self.evidence.failure_snapshot(self.surface, f"failure-step-{step_number}")
                     return self._failure(RunStatus.HARD_FAILURE, f"step-{step_number}", "SURFACE_ERROR", str(exc))

@@ -7,7 +7,7 @@ from typing import Any, Protocol
 from .evidence import EvidenceRecorder
 from .models import ActionStep, ActionType, CapabilityArtifact, Locator, RunResult, RunStatus
 from .policy import ConfirmationRequired, GuardrailPolicy, PolicyViolation
-from .surface import SurfaceError, SurfaceObservation, SurfaceTimeout
+from .surface import SurfaceAppError, SurfaceError, SurfaceObservation, SurfaceTimeout, UnexpectedDialog
 
 
 class ReplaySurface(Protocol):
@@ -96,6 +96,12 @@ class ReplayRunner:
                 return self._failure(step, "POLICY_BLOCKED", str(exc))
             except InputValidationError as exc:
                 return self._failure(step, "INVALID_INPUT", str(exc))
+            except UnexpectedDialog as exc:
+                self.evidence.failure_snapshot(self.surface, f"failure-{step.id}")
+                return self._failure(step, "UNEXPECTED_DIALOG", str(exc))
+            except SurfaceAppError as exc:
+                self.evidence.failure_snapshot(self.surface, f"failure-{step.id}")
+                return self._failure(step, "APP_ERROR", str(exc))
             except SurfaceTimeout as exc:
                 self.evidence.failure_snapshot(self.surface, f"failure-{step.id}")
                 return self._failure(step, "TIMEOUT", str(exc), RunStatus.RECOVERABLE_FAILURE)

@@ -17,6 +17,14 @@ class SurfaceTimeout(SurfaceError):
     """The surface did not reach the requested state before its deadline."""
 
 
+class UnexpectedDialog(SurfaceError):
+    """An unexpected confirmation or browser dialog blocked the surface."""
+
+
+class SurfaceAppError(SurfaceError):
+    """The application returned an outright error while acting."""
+
+
 @dataclass(frozen=True)
 class Control:
     ephemeral_id: str
@@ -266,6 +274,11 @@ class BrowserSurface:
         except SurfaceError:
             raise
         except Exception as exc:
+            message = str(exc).lower()
+            if "dialog" in message or "confirmation" in message:
+                raise UnexpectedDialog(f"{action.value} was blocked by an unexpected dialog: {exc}") from exc
+            if "application error" in message:
+                raise SurfaceAppError(f"{action.value} hit an application error: {exc}") from exc
             if "Timeout" in type(exc).__name__:
                 raise SurfaceTimeout(f"{action.value} timed out: {exc}") from exc
             raise SurfaceError(f"{action.value} failed: {exc}") from exc
