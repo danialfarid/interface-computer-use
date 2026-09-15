@@ -59,6 +59,29 @@ def _redact_readable_targets(value: Any) -> Any:
     return value
 
 
+def _redact_control_metadata(value: Any) -> Any:
+    """Keep visible link names out of persisted observations and action logs."""
+
+    if isinstance(value, dict):
+        result = {str(key): _redact_control_metadata(item) for key, item in value.items()}
+        controls = result.get("controls")
+        if isinstance(controls, list):
+            for control in controls:
+                if isinstance(control, dict) and control.get("kind") == "link":
+                    control["name"] = "<REDACTED>"
+        locators = [result.get("locator"), result if "strategy" in result else None]
+        for locator in locators:
+            if not isinstance(locator, dict):
+                continue
+            locator_value = locator.get("value")
+            if isinstance(locator_value, str) and any(ord(character) > 127 for character in locator_value):
+                locator["value"] = "<REDACTED>"
+        return result
+    if isinstance(value, list):
+        return [_redact_control_metadata(item) for item in value]
+    return value
+
+
 class EvidenceRecorder:
     """Append-only run evidence with redaction at the persistence boundary."""
 
@@ -93,10 +116,10 @@ class EvidenceRecorder:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
 
     def redact_payload(self, payload: Any) -> Any:
-        return _redact_readable_targets(_redact_sensitive_values(
+        return _redact_control_metadata(_redact_readable_targets(_redact_sensitive_values(
             _redact_sensitive_names(redact_value("payload", payload), self.sensitive_names),
             self.sensitive_values,
-        ))
+        )))
 
     def redact_url(self, value: str) -> str:
         return _redact_sensitive_values(redact_url(value), self.sensitive_values)

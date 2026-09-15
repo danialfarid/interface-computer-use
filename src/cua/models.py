@@ -398,6 +398,12 @@ class CapabilityArtifact:
 def _validate_locator_persistence(locator: Locator, owner: str) -> None:
     if locator.strategy not in Locator.SUPPORTED_STRATEGIES:
         raise ValueError(f"{owner} has an unsupported locator strategy: {locator.strategy}")
+    if locator.strategy in {"role", "css"} and any(
+        ord(character) > 127 for character in locator.value
+    ):
+        raise ValueError(f"{owner} locator contains non-ASCII runtime text")
+    if locator.strategy == "role" and locator.value.partition(":")[0] == "link":
+        raise ValueError(f"{owner} link locator cannot persist a visible name")
     if redact_text(locator.value) != locator.value:
         raise ValueError(f"{owner} locator appears to contain sensitive text")
     for fallback in locator.fallback:

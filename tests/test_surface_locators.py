@@ -2,7 +2,7 @@ from cua.models import Locator
 from cua.surface import BrowserSurface
 
 
-def test_stable_locator_prefers_label_then_role_then_named_css():
+def test_stable_locator_prefers_label_then_stable_dom_metadata_then_role():
     assert BrowserSurface._stable_locator(
         {"label": "Member ID", "role": "input", "text": "", "aria": "", "name": "member", "tag": "input", "id": "", "href": ""}
     ).strategy == "label"
@@ -15,3 +15,6 @@ def test_stable_locator_prefers_label_then_role_then_named_css():
     assert BrowserSurface._stable_locator(
         {"label": "", "role": "input", "text": "Member ID", "aria": "Member ID", "name": "", "tag": "input", "id": "", "href": ""}
     ).value == 'input[aria-label="Member ID"]'
+    assert BrowserSurface._stable_locator(
+        {"label": "", "role": "link", "text": "Return to lookup", "aria": "", "name": "", "tag": "a", "id": "", "href": "/"}
+    ).value == 'a[href="/"]'

@@ -37,7 +37,7 @@ def home_page() -> bytes:
           <table>
             <tr><th><label for="member-number">Member ID</label></th>
                 <td><input id="member-number" name="member" autocomplete="off"></td></tr>
-            <tr><td colspan="2"><input type="submit" value="Search"></td></tr>
+            <tr><td colspan="2"><input id="search-action" type="submit" value="Search"></td></tr>
           </table>
         </form>
         """,

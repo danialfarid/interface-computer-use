@@ -72,6 +72,17 @@ def test_evidence_redacts_sensitive_role_action_names(tmp_path):
     assert "alice smith" not in json.dumps(record["payload"])
 
 
+def test_evidence_redacts_unicode_role_action_names(tmp_path):
+    evidence = EvidenceRecorder(tmp_path)
+    evidence.event(
+        "action",
+        step={"action": "click", "target": {"strategy": "role", "value": "link:José Núñez"}},
+    )
+
+    record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
+    assert "José Núñez" not in json.dumps(record["payload"], ensure_ascii=False)
+
+
 def test_evidence_redacts_uri_encoded_sensitive_values(tmp_path):
     evidence = EvidenceRecorder(tmp_path)
     evidence.sensitive_values.add("ab cd")

@@ -21,6 +21,7 @@ from cua.models import (
     RunStatus,
 )
 from cua.policy import GuardrailPolicy
+from cua.replay import ReplayRunner
 from cua.surface import Control, ReadableTarget, SurfaceAppError, SurfaceObservation
 
 
@@ -53,6 +54,7 @@ class FakeSurface:
         self.actions.append((action, locator, value))
         if action is ActionType.CLICK:
             self.page = "detail"
+            self.url = "http://127.0.0.1:8765/member"
 
     def extract(self, locator, timeout_ms=5000):
         return "$1,240.50"
@@ -221,6 +223,12 @@ def test_parameterization_does_not_replace_numeric_input_inside_hostname():
     ) == "http://127.0.0.1/member?member={{member_id}}"
 
 
+def test_parameterization_preserves_static_path_segments():
+    assert _parameterize_url(
+        "http://127.0.0.1/member?member=member", {"member_id": "member"}
+    ) == "http://127.0.0.1/member?member={{member_id}}"
+
+
 def test_human_discovery_action_is_parameterized_before_artifact_recording(tmp_path):
     surface = FakeSurface()
     coordinator = HandoffCoordinator(
@@ -302,7 +310,9 @@ def test_discovery_escalates_a_blocked_risky_action_to_human_control(tmp_path):
     assert not operator_errors
     assert result.status is RunStatus.SUCCESS
     assert artifact is not None
-    assert artifact.steps[0].id == "human-search"
+    assert artifact.target["url"] == "http://127.0.0.1:8765/member"
+    assert artifact.steps[0].id == "handoff-anchor"
+    assert artifact.steps[1].action is ActionType.EXTRACT
 
 
 @pytest.mark.parametrize("model_marks_done", [False, True])
@@ -537,6 +547,16 @@ def test_discovery_hands_off_terminal_application_error(tmp_path):
     assert not operator_errors
     assert result.status is RunStatus.SUCCESS
     assert artifact is not None
+    assert artifact.target["url"] == "http://127.0.0.1:8765/"
+    assert [step.action for step in artifact.steps] == [ActionType.NAVIGATE]
+    replay_result = ReplayRunner(
+        AppErrorAfterFillSurface(),
+        policy,
+        EvidenceRecorder(tmp_path / "replay"),
+        artifact,
+        inputs={"member_id": "1001"},
+    ).run()
+    assert replay_result.status is RunStatus.SUCCESS
 
 
 def test_discovery_rejects_sensitive_target_query_values(tmp_path):

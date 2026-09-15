@@ -85,6 +85,8 @@ class DiscoveryRunner:
         self.handoff_wait_s = handoff_wait_s
         self.recorded_steps: list[ActionStep] = []
         self.output_sources: dict[str, Locator] = {}
+        self._artifact_target_url = template.target["url"]
+        self._handoff_step_start = 0
         self._handoff_used = False
         self.evidence.sensitive_names.update(
             name for name, spec in self.template.output_descriptions.items() if spec[2]
@@ -454,7 +456,7 @@ class DiscoveryRunner:
         raise SurfaceError(f"extract output is not declared: {name}")
 
     def _safe_target_url(self) -> str:
-        parameterized = _parameterize_url(self.template.target["url"], self.parameter_values)
+        parameterized = _parameterize_url(self._artifact_target_url, self.parameter_values)
         redacted = redact_url(parameterized)
         if redacted != parameterized:
             raise ValueError("target URL contains credentials or an unparameterized secret")
@@ -492,6 +494,7 @@ class DiscoveryRunner:
     ) -> bool:
         if self.handoff is None or self._handoff_used:
             return False
+        self._handoff_step_start = len(self.recorded_steps)
         if observation is None:
             try:
                 observation = self.surface.observe()
@@ -508,8 +511,35 @@ class DiscoveryRunner:
         if not self.handoff.wait_for_resume(request.intervention_id, self.handoff_wait_s):
             return False
         self.evidence.event("run_resumed", intervention_id=request.intervention_id)
+        self._start_replay_boundary()
         self._handoff_used = True
         return True
+
+    def _start_replay_boundary(self) -> None:
+        """Start the artifact from the state reached after human intervention."""
+
+        self._artifact_target_url = self.surface.url
+        post_handoff_steps = self.recorded_steps[self._handoff_step_start :]
+        self.output_sources = {
+            step.value: self.output_sources[step.value]
+            for step in post_handoff_steps
+            if step.action is ActionType.EXTRACT
+            and step.value in self.output_sources
+        }
+        anchor = ActionStep(
+            "handoff-anchor",
+            ActionType.NAVIGATE,
+            value=self._safe_target_url(),
+            description="Replay from the allowlisted state reached after human handoff.",
+        )
+        self.recorded_steps = [
+            anchor,
+            *[
+                step
+                for step in post_handoff_steps
+                if step.action is ActionType.EXTRACT and step.value in self.output_sources
+            ],
+        ]
 
     def _complete_after_handoff(
         self, step: str, observation: SurfaceObservation | None = None
@@ -622,8 +652,8 @@ def _parameterize_url(value: str, parameter_values: dict[str, str]) -> str:
         (
             parsed.scheme,
             parsed.netloc,
-            _parameterize_text(parsed.path, parameter_values),
+            parsed.path,
             query,
-            _parameterize_text(parsed.fragment, parameter_values),
+            parsed.fragment,
         )
     )

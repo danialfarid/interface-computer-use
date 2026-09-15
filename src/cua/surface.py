@@ -321,11 +321,11 @@ class BrowserSurface:
                 info["label"],
                 rationale="Associated form label is more stable than position or generated markup.",
             )
-        if info["role"] in {"button", "link"} and info["text"]:
+        if info["id"]:
             return Locator(
-                "role",
-                f"{info['role']}:{info['text']}",
-                rationale="Accessible role and visible name survive table/layout changes.",
+                "css",
+                f"#{info['id']}",
+                rationale="Author-provided element id; used only when semantic metadata is absent.",
             )
         if info["aria"]:
             return Locator(
@@ -339,17 +339,17 @@ class BrowserSurface:
                 f"{info['tag']}[name={_quote_css(info['name'])}]",
                 rationale="Named control fallback for legacy markup without test IDs.",
             )
-        if info["id"]:
-            return Locator(
-                "css",
-                f"#{info['id']}",
-                rationale="Author-provided element id; used only when semantic metadata is absent.",
-            )
         if info["href"]:
             return Locator(
                 "css",
                 f"a[href={_quote_css(info['href'])}]",
                 rationale="Exact route is a stable fallback for a legacy link.",
+            )
+        if info["role"] in {"button", "link"} and info["text"]:
+            return Locator(
+                "role",
+                f"{info['role']}:{info['text']}",
+                rationale="Accessible role and visible name fallback when no stable DOM attribute exists.",
             )
         raise SurfaceError(f"control has no stable locator: {info}")
 

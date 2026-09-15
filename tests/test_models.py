@@ -120,11 +120,28 @@ def test_capability_rejects_sensitive_role_locator_names():
         target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
         parameters={},
         outputs={},
-        steps=(ActionStep("click", ActionType.CLICK, Locator("role", "link:alice smith")),),
+        steps=(ActionStep("click", ActionType.CLICK, Locator("role", "button:alice smith")),),
         checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
     )
 
     with pytest.raises(ValueError, match="sensitive text"):
+        artifact.validate()
+
+
+def test_capability_rejects_non_ascii_role_locator_runtime_text():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={},
+        outputs={},
+        steps=(ActionStep("click", ActionType.CLICK, Locator("role", "link:José Núñez")),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+
+    with pytest.raises(ValueError, match="non-ASCII"):
         artifact.validate()
 
 
