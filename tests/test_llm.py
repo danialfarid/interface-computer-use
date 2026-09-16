@@ -13,7 +13,7 @@ def _sensitive_observation():
         "José Núñez",
         "Member José Núñez Current savings balance $1,240.50",
         (
-            Control("control-0", "input", "José Núñez", Locator("label", "José Núñez")),
+            Control("control-0", "input", "Member ID", Locator("label", "José Núñez")),
             Control("control-1", "button", "Search", Locator("role", "button:Search")),
         ),
         (ReadableTarget("target-0", "$1,240.50", Locator("css", "#balance-value")),),
@@ -31,6 +31,7 @@ def test_model_observation_keeps_structure_without_runtime_values():
     assert "control-0" in serialized
     assert safe["controls"][0]["locator_strategy"] == "label"
     assert safe["readable_targets"][0]["id"] == "target-0"
+    assert safe["readable_targets"][0]["stable_key"] == "balance-value"
 
     lower_ascii = SurfaceObservation(
         "http://127.0.0.1:8765/member/alice-smith",
@@ -80,6 +81,7 @@ def test_provider_request_uses_sanitized_observation_and_records_provenance(monk
     )
     client.set_parameter_names({"member_id"})
     client.set_task_context({"balance"})
+    client.set_last_action("fill")
 
     decision = client.decide("look up José Núñez", _sensitive_observation())
     body = json.loads(requests[0][0].data)
@@ -89,6 +91,9 @@ def test_provider_request_uses_sanitized_observation_and_records_provenance(monk
     assert decision.done is True
     assert "José Núñez" not in serialized
     assert "$1,240.50" not in serialized
+    assert user["last_action"] == "fill"
+    assert user["next_action_hint"] == "click control-1 (Search)"
+    assert [control["id"] for control in user["observation"]["controls"]] == ["control-1"]
     assert client.provenance() == {
         "decision_source": "provider",
         "model": "test-model",

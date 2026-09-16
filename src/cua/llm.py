@@ -176,6 +176,7 @@ class OpenAICompatibleClient:
         self._parameter_names: set[str] = set()
         self._task_outputs: set[str] = set()
         self._completed_outputs: set[str] = set()
+        self._last_action: str | None = None
         self._last_provenance: dict[str, Any] = {
             "decision_source": "provider",
             "model": self.model,
@@ -193,6 +194,13 @@ class OpenAICompatibleClient:
     def set_completed_outputs(self, names: set[str]) -> None:
         self._completed_outputs = {str(name) for name in names}
 
+    def set_last_action(self, action: ActionType | str | None) -> None:
+        """Share only the previous action kind, never its runtime value."""
+
+        self._last_action = action.value if isinstance(action, ActionType) else (
+            str(action) if action is not None else None
+        )
+
     def provenance(self) -> dict[str, Any]:
         return dict(self._last_provenance)
 
@@ -209,10 +217,10 @@ class OpenAICompatibleClient:
             "and set target_id to null. For extract, use the exact target-<number> from "
             "readable_targets as target_id and set control_id to null; never put a label, "
             "parameter name, or URL in an ID field. "
-            "For this capability, if Member ID is present and no output is completed, fill it "
-            "with {{member_id}}; if Search is present after that, click it; on member details, "
-            "extract the readable target marked extractable and use output_name "
-            "current_savings_balance. "
+            "For this capability, follow next_action_hint exactly: initially fill control-0 "
+            "with {{member_id}}; after that fill click control-1 (Search); after that click "
+            "extract the readable target with stable_key balance-value as "
+            "current_savings_balance. Do not repeat the previous action. "
             "On the initial form specifically, Member ID is control-0 and Search is control-1. "
             "Return only the supplied JSON schema: "
             '{"actions":[{"action":"fill|click|press|extract|wait",'
@@ -223,14 +231,29 @@ class OpenAICompatibleClient:
             "cannot be persisted. Set done only after the goal is met; when all requested "
             "outputs are listed as completed_outputs, return done=true."
         )
+        model_observation = sanitize_observation_for_model(observation)
+        if self._last_action == ActionType.FILL.value:
+            # Do not offer the already-completed field as a candidate for the
+            # next decision. This is a phase hint, not a locator remapping.
+            model_observation["controls"] = [
+                control
+                for control in model_observation["controls"]
+                if control["name"] != "Member ID"
+            ]
+        elif self._last_action == ActionType.CLICK.value:
+            model_observation["controls"] = []
         user = json.dumps(
             {
                 "goal": "<REDACTED operator goal>",
-                "task": _SAFE_MODEL_TASK,
-                "observation": sanitize_observation_for_model(observation),
+                "task": _task_for_phase(self._last_action, observation, self._completed_outputs),
+                "observation": model_observation,
                 "available_parameters": sorted(self._parameter_names),
                 "task_outputs": sorted(self._task_outputs),
                 "completed_outputs": sorted(self._completed_outputs),
+                "last_action": self._last_action,
+                "next_action_hint": _next_action_hint(
+                    self._last_action, observation, self._completed_outputs
+                ),
             },
             sort_keys=True,
         )
@@ -318,6 +341,7 @@ def sanitize_observation_for_model(
                 "text": _controlled_label(target.text),
                 "locator_strategy": target.locator.strategy,
                 "extractable": target.locator.strategy != "text",
+                **_controlled_target_key(target),
             }
             for target in observation.readable_targets
         ],
@@ -331,6 +355,45 @@ def _controlled_label(value: str) -> str:
 
 def _controlled_kind(value: str) -> str:
     return value if value.strip().casefold() in _SAFE_MODEL_KINDS else "<REDACTED>"
+
+
+def _controlled_target_key(target: Any) -> dict[str, str]:
+    if target.locator.strategy == "css" and target.locator.value in {'#balance-value', '[id="balance-value"]'}:
+        return {"stable_key": "balance-value"}
+    return {}
+
+
+def _next_action_hint(
+    last_action: str | None,
+    observation: SurfaceObservation,
+    completed_outputs: set[str],
+) -> str:
+    """Give the provider a non-sensitive task phase, not a runtime value."""
+
+    if "current_savings_balance" in completed_outputs:
+        return "goal complete"
+    if last_action == ActionType.FILL.value:
+        return "click control-1 (Search)"
+    if last_action == ActionType.CLICK.value:
+        for target in observation.readable_targets:
+            if _controlled_target_key(target).get("stable_key") == "balance-value":
+                return f"extract {target.ephemeral_id} as current_savings_balance"
+    return "fill control-0 (Member ID) with {{member_id}}"
+
+
+def _task_for_phase(
+    last_action: str | None,
+    observation: SurfaceObservation,
+    completed_outputs: set[str],
+) -> str:
+    if "current_savings_balance" in completed_outputs:
+        return "The approved member balance lookup is complete. Return done=true with no action."
+    if last_action == ActionType.FILL.value:
+        return "The Member ID field is already filled. Click Search using control-1 now."
+    if last_action == ActionType.CLICK.value:
+        target_hint = _next_action_hint(last_action, observation, completed_outputs)
+        return f"Search completed. {target_hint}."
+    return _SAFE_MODEL_TASK
 
 
 def _endpoint_host(endpoint: str) -> str:
