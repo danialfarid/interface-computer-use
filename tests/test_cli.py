@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from cua.cli import _coerce_inputs, _parse_inputs, _remap_to_approved_demo, main
@@ -53,3 +55,14 @@ def test_cli_only_remaps_a_credential_free_loopback_root():
                 }
             }
         )
+
+
+def test_replay_cli_validates_inputs_before_opening_the_browser(tmp_path, monkeypatch, capsys):
+    artifact_path = tmp_path / "artifact.json"
+    artifact_path.write_text(
+        (Path(__file__).parents[1] / "evidence" / "example" / "discovery" / "artifact.json").read_text()
+    )
+    monkeypatch.setattr("cua.cli._ensure_demo_server", lambda _url: pytest.fail("browser setup should not run"))
+
+    assert main(["replay", "--artifact", str(artifact_path)]) == 1
+    assert "INVALID_INPUT" in capsys.readouterr().out

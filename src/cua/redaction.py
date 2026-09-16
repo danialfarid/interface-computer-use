@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote, urlsplit, urlunsplit
 
 
 _SECRET_PATTERNS = (
@@ -29,6 +29,23 @@ _PII_PATTERNS = (
     re.compile(r"(?im)\b(?:member\s+)?(?:name|address)\s*(?:[:\t]|\r?\n)\s*[^\r\n]+"),
 )
 _SAFE_QUERY_KEYS = frozenset({"member"})
+_SAFE_PATH_SEGMENTS = frozenset(
+    {
+        "member",
+        "runtime",
+        "validation",
+        "permission-denied",
+        "session-expired",
+        "app-error",
+        "confirmation",
+        "hostile",
+        "worker.js",
+        "shared.js",
+        "redirect",
+        "redirect-one",
+        "redirect-two",
+    }
+)
 
 
 def redact_text(value: str) -> str:
@@ -76,7 +93,7 @@ def redact_url(value: str) -> str:
     encoded_query = "&".join(
         f"{quote(key, safe='')}={quote(item, safe='{}')}" for key, item in query
     )
-    return urlunsplit((parsed.scheme, safe_netloc, parsed.path, encoded_query, ""))
+    return urlunsplit((parsed.scheme, safe_netloc, _redact_path(parsed.path), encoded_query, ""))
 
 
 _PLACEHOLDER = re.compile(r"^\{\{[A-Za-z_][A-Za-z0-9_]*\}\}$")
@@ -92,8 +109,25 @@ def redact_runtime_url(value: str) -> str:
         safe_key = key if key in _SAFE_QUERY_KEYS else "<REDACTED>"
         query.append(f"{quote(safe_key, safe='')}={quote(safe_item, safe='{}')}")
     return urlunsplit(
-        (parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "&".join(query), "")
+        (
+            parsed.scheme,
+            parsed.netloc.rsplit("@", 1)[-1],
+            _redact_path(parsed.path),
+            "&".join(query),
+            "",
+        )
     )
+
+
+def _redact_path(path: str) -> str:
+    segments = []
+    for segment in path.split("/"):
+        decoded = unquote(segment)
+        if decoded == "" or decoded in _SAFE_PATH_SEGMENTS or _PLACEHOLDER.fullmatch(decoded):
+            segments.append(quote(decoded, safe="-._~{}"))
+        else:
+            segments.append("%3CREDACTED%3E")
+    return "/".join(segments)
 
 
 def redact_artifact_payload(payload: dict[str, Any]) -> dict[str, Any]:

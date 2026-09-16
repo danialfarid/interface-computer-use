@@ -1,7 +1,7 @@
 import json
 
 from cua.evidence import EvidenceRecorder
-from cua.redaction import redact_artifact_payload, redact_text, redact_value
+from cua.redaction import redact_artifact_payload, redact_runtime_url, redact_text, redact_value
 
 
 def test_redaction_handles_bearer_and_key_formats_without_crashing():
@@ -157,6 +157,13 @@ def test_evidence_redacts_unreviewed_query_keys(tmp_path):
 
     record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
     assert "alice-smith" not in json.dumps(record["payload"])
+
+
+def test_runtime_url_redacts_unreviewed_path_segments():
+    redacted = redact_runtime_url("http://127.0.0.1:8765/member/123456789")
+
+    assert "123456789" not in redacted
+    assert redacted.endswith("/member/%3CREDACTED%3E")
 
 
 def test_evidence_redacts_uri_encoded_sensitive_values(tmp_path):

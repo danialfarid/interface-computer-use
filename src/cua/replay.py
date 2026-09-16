@@ -35,6 +35,25 @@ class InputValidationError(ValueError):
     pass
 
 
+def validate_replay_inputs(artifact: CapabilityArtifact, inputs: dict[str, Any]) -> None:
+    expected = set(artifact.parameters)
+    provided = set(inputs)
+    missing = sorted(name for name in expected if artifact.parameters[name].required and name not in provided)
+    unknown = sorted(provided - expected)
+    if missing:
+        raise InputValidationError(f"missing required input(s): {', '.join(missing)}")
+    if unknown:
+        raise InputValidationError(f"unknown input(s): {', '.join(unknown)}")
+    for name, spec in artifact.parameters.items():
+        if name not in inputs:
+            continue
+        value = inputs[name]
+        if spec.type == "string" and not isinstance(value, str):
+            raise InputValidationError(f"{name} must be a string")
+        if spec.type == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
+            raise InputValidationError(f"{name} must be an integer")
+
+
 class ReplayRunner:
     """Execute a saved capability without asking a model what to do next."""
 
@@ -334,22 +353,7 @@ class ReplayRunner:
         raise last_error
 
     def _validate_inputs(self) -> None:
-        expected = set(self.artifact.parameters)
-        provided = set(self.inputs)
-        missing = sorted(name for name in expected if self.artifact.parameters[name].required and name not in provided)
-        unknown = sorted(provided - expected)
-        if missing:
-            raise InputValidationError(f"missing required input(s): {', '.join(missing)}")
-        if unknown:
-            raise InputValidationError(f"unknown input(s): {', '.join(unknown)}")
-        for name, spec in self.artifact.parameters.items():
-            if name not in self.inputs:
-                continue
-            value = self.inputs[name]
-            if spec.type == "string" and not isinstance(value, str):
-                raise InputValidationError(f"{name} must be a string")
-            if spec.type == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
-                raise InputValidationError(f"{name} must be an integer")
+        validate_replay_inputs(self.artifact, self.inputs)
 
     def _preflight(self) -> None:
         """Resolve the complete plan before allowing any UI side effect."""

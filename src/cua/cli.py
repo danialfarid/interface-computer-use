@@ -15,7 +15,7 @@ from .handoff import HandoffCoordinator, HandoffServer
 from .llm import LLMError, OpenAICompatibleClient
 from .models import CapabilityArtifact, RunStatus
 from .policy import GuardrailPolicy, PolicyViolation
-from .replay import InputValidationError, ReplayRunner, _resolve_value
+from .replay import InputValidationError, ReplayRunner, _resolve_value, validate_replay_inputs
 from .surface import BrowserSurface, SurfaceError
 from .templates import member_balance_template
 
@@ -153,6 +153,11 @@ def _run_replay(args: argparse.Namespace) -> int:
         pass
     if artifact.target.get("origin") != DEFAULT_ORIGIN:
         raise ValueError(f"replay target origin must be the approved demo origin: {DEFAULT_ORIGIN}")
+    try:
+        validate_replay_inputs(artifact, inputs)
+    except InputValidationError as exc:
+        print(json.dumps({"status": "hard_failure", "error_code": "INVALID_INPUT", "message": str(exc)}))
+        return 1
     policy = GuardrailPolicy.local_demo(DEFAULT_ORIGIN)
     try:
         policy.check_url(target_url)
