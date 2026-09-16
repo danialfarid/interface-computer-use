@@ -109,6 +109,20 @@ class ReplayRunner:
                     evidence_dir=str(self.evidence.directory),
                 )
             )
+        try:
+            self._preflight()
+        except (PolicyViolation, ConfirmationRequired) as exc:
+            return self._failure(
+                ActionStep("preflight", ActionType.WAIT),
+                "POLICY_BLOCKED",
+                str(exc),
+            )
+        except InputValidationError as exc:
+            return self._failure(
+                ActionStep("preflight", ActionType.WAIT),
+                "INVALID_INPUT",
+                str(exc),
+            )
 
         outputs: dict[str, Any] = {}
         for step in self.artifact.steps:
@@ -186,6 +200,12 @@ class ReplayRunner:
                 self._merge_operator_outputs(outputs)
                 try:
                     observation = self.surface.observe()
+                except PolicyViolation as second_exc:
+                    return self._failure(
+                        ActionStep("final-observation", ActionType.WAIT),
+                        "POLICY_BLOCKED",
+                        str(second_exc),
+                    )
                 except SurfaceError as second_exc:
                     return self._surface_failure(ActionStep("final-observation", ActionType.WAIT), second_exc)
             else:
@@ -330,6 +350,17 @@ class ReplayRunner:
                 raise InputValidationError(f"{name} must be a string")
             if spec.type == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
                 raise InputValidationError(f"{name} must be an integer")
+
+    def _preflight(self) -> None:
+        """Resolve the complete plan before allowing any UI side effect."""
+
+        for step in self.artifact.steps:
+            self.policy.check_step(step, confirmed=self.confirmed_risky)
+            value = _resolve_value(step.value, self.inputs, url=step.action is ActionType.NAVIGATE)
+            if step.action is ActionType.NAVIGATE:
+                if value is None:
+                    raise InputValidationError(f"step {step.id} has no navigation URL")
+                self.policy.check_url(value)
 
     def _checkpoint_matches(self, observation: SurfaceObservation) -> bool:
         checkpoint = self.artifact.checkpoint

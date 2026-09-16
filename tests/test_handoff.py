@@ -83,6 +83,26 @@ def test_human_confirmation_requires_a_boolean(tmp_path):
     assert surface.actions == []
 
 
+def test_human_action_rejects_unreviewed_locator(tmp_path):
+    surface = FakeSurface()
+    coordinator = HandoffCoordinator(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+    )
+    request = coordinator.create_request(
+        goal="goal", capability_id="cap", step="step", reason="stuck", observation=surface.observe()
+    )
+    coordinator.take_control(request.intervention_id, "reviewer")
+
+    with pytest.raises(ValueError):
+        coordinator.record_human_action(
+            request.intervention_id,
+            ActionStep("human-search", ActionType.CLICK, Locator("role", "button:alice smith")),
+        )
+    assert surface.actions == []
+
+
 def test_local_operator_api_transfers_and_resumes(tmp_path):
     surface = FakeSurface()
     coordinator = HandoffCoordinator(
@@ -96,15 +116,26 @@ def test_local_operator_api_transfers_and_resumes(tmp_path):
     server = HandoffServer(coordinator)
     server.start()
     try:
-        with urlopen(server.url + "/interventions") as response:
+        with pytest.raises(HTTPError):
+            urlopen(server.url + "/interventions")
+        listing_request = Request(
+            server.url + "/interventions",
+            headers={"X-CUA-Handoff-Token": coordinator.access_token},
+        )
+        with urlopen(listing_request) as response:
             listing = json.loads(response.read())
         assert listing["interventions"][0]["state"] == HandoffState.REQUESTED
+        assert listing["interventions"][0]["goal"] == "<REDACTED>"
+        assert listing["interventions"][0]["reason"] == "<REDACTED>"
 
         def post(path, payload):
             request = Request(
                 server.url + path,
                 data=json.dumps(payload).encode(),
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-CUA-Handoff-Token": coordinator.access_token,
+                },
                 method="POST",
             )
             with urlopen(request) as response:
@@ -166,7 +197,10 @@ def test_operator_api_action_is_applied_by_browser_owner_thread(tmp_path):
                     }
                 }
             ).encode(),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "X-CUA-Handoff-Token": coordinator.access_token,
+            },
             method="POST",
         )
         response_body: list[dict] = []

@@ -6,7 +6,6 @@ import os
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from urllib.parse import urlsplit
 
 from .models import ActionType, RiskClass
 from .surface import SurfaceObservation
@@ -26,9 +25,12 @@ _SAFE_MODEL_LABELS = frozenset(
         "member services console",
     }
 )
-_SAFE_MODEL_PATHS = frozenset({"/", "/member"})
 _SAFE_MODEL_KINDS = frozenset(
     {"button", "checkbox", "combobox", "input", "link", "radio", "select", "textbox"}
+)
+_SAFE_MODEL_TASK = (
+    "On the member lookup form, fill Member ID with {{member_id}}, click Search, "
+    "then extract the current savings balance."
 )
 
 
@@ -37,6 +39,7 @@ DECISION_JSON_SCHEMA: dict[str, Any] = {
     "properties": {
         "actions": {
             "type": "array",
+            "maxItems": 1,
             "items": {
                 "type": "object",
                 "properties": {
@@ -108,6 +111,8 @@ class AgentDecision:
         raw_actions = payload.get("actions", [])
         if not isinstance(raw_actions, list):
             raise LLMError("decision.actions must be an array")
+        if len(raw_actions) > 1:
+            raise LLMError("decision.actions must contain at most one action")
         actions = []
         for item in raw_actions:
             if not isinstance(item, dict):
@@ -198,6 +203,17 @@ class OpenAICompatibleClient:
             "Use only control_id and target_id values present in the observation. "
             "For extract, set control_id to null and use the readable target_id. "
             "Take the smallest safe next action. Never invent selectors. "
+            "The browser is already open on the approved target; do not navigate to the current page. "
+            "For navigate, put an approved URL in value and leave both IDs null. "
+            "For fill, click, and press, use the exact control-<number> from controls as control_id "
+            "and set target_id to null. For extract, use the exact target-<number> from "
+            "readable_targets as target_id and set control_id to null; never put a label, "
+            "parameter name, or URL in an ID field. "
+            "For this capability, if Member ID is present and no output is completed, fill it "
+            "with {{member_id}}; if Search is present after that, click it; on member details, "
+            "extract the readable target marked extractable and use output_name "
+            "current_savings_balance. "
+            "On the initial form specifically, Member ID is control-0 and Search is control-1. "
             "Return only the supplied JSON schema: "
             '{"actions":[{"action":"fill|click|press|extract|wait",'
             '"control_id":"...","target_id":"...","value":"...",'
@@ -210,6 +226,7 @@ class OpenAICompatibleClient:
         user = json.dumps(
             {
                 "goal": "<REDACTED operator goal>",
+                "task": _SAFE_MODEL_TASK,
                 "observation": sanitize_observation_for_model(observation),
                 "available_parameters": sorted(self._parameter_names),
                 "task_outputs": sorted(self._task_outputs),
@@ -283,7 +300,7 @@ def sanitize_observation_for_model(
 
     del sensitive_values, parameter_values
     return {
-        "url": _safe_model_url(observation.url),
+        "url": "<CURRENT_ALLOWLISTED_SURFACE>",
         "title": _controlled_label(observation.title),
         "text": "<REDACTED>",
         "controls": [
@@ -314,17 +331,6 @@ def _controlled_label(value: str) -> str:
 
 def _controlled_kind(value: str) -> str:
     return value if value.strip().casefold() in _SAFE_MODEL_KINDS else "<REDACTED>"
-
-
-def _safe_model_url(value: str) -> str:
-    parsed = urlsplit(value)
-    hostname = parsed.hostname or "<REDACTED>"
-    try:
-        port = f":{parsed.port}" if parsed.port is not None else ""
-    except ValueError:
-        port = ""
-    path = parsed.path if parsed.path in _SAFE_MODEL_PATHS else "/<REDACTED>"
-    return f"{parsed.scheme}://{hostname}{port}{path}"
 
 
 def _endpoint_host(endpoint: str) -> str:

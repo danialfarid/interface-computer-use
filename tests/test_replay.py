@@ -131,6 +131,28 @@ def test_replay_rejects_missing_input_before_touching_surface(tmp_path):
     assert surface.seen_values == []
 
 
+def test_replay_rejects_undeclared_placeholder_before_any_ui_action(tmp_path):
+    malformed = replace(
+        artifact(),
+        steps=(
+            artifact().steps[1],
+            ActionStep("late-fill", ActionType.FILL, Locator("label", "Member ID"), "{{unknown}}"),
+            artifact().steps[2],
+        ),
+    )
+    surface = FakeReplaySurface()
+    result = ReplayRunner(
+        surface,
+        GuardrailPolicy.local_demo("http://127.0.0.1:8765"),
+        EvidenceRecorder(tmp_path),
+        malformed,
+        inputs={"member_id": "1001"},
+    ).run()
+
+    assert result.error_code == "INVALID_ARTIFACT"
+    assert surface.seen_values == []
+
+
 def test_replay_rejects_success_when_declared_output_was_not_extracted(tmp_path):
     saved = artifact()
     incomplete = replace(saved, steps=saved.steps[:2])

@@ -1,6 +1,8 @@
 import json
 
-from cua.llm import OpenAICompatibleClient, sanitize_observation_for_model
+import pytest
+
+from cua.llm import AgentDecision, LLMError, OpenAICompatibleClient, sanitize_observation_for_model
 from cua.models import Locator
 from cua.surface import Control, ReadableTarget, SurfaceObservation
 
@@ -39,7 +41,7 @@ def test_model_observation_keeps_structure_without_runtime_values():
     )
     lower_safe = sanitize_observation_for_model(lower_ascii)
     assert "alice smith" not in json.dumps(lower_safe)
-    assert lower_safe["url"] == "http://127.0.0.1:8765/<REDACTED>"
+    assert lower_safe["url"] == "<CURRENT_ALLOWLISTED_SURFACE>"
 
 
 def test_provider_request_uses_sanitized_observation_and_records_provenance(monkeypatch):
@@ -96,3 +98,8 @@ def test_provider_request_uses_sanitized_observation_and_records_provenance(monk
         "completion_tokens": 4,
         "total_tokens": 14,
     }
+
+
+def test_decision_parser_rejects_action_bursts():
+    with pytest.raises(LLMError, match="at most one action"):
+        AgentDecision.from_dict({"actions": [{}, {}]})

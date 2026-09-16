@@ -103,6 +103,43 @@ def test_capability_normalizes_missing_contract_fields_to_value_error():
         CapabilityArtifact.from_dict(payload)
 
 
+def test_capability_loader_rejects_unknown_fields_and_missing_timestamp():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={},
+        outputs={},
+        steps=(ActionStep("wait", ActionType.WAIT),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+    payload = json.loads(artifact.to_json())
+    payload["approved"] = True
+
+    with pytest.raises(ValueError, match="unknown field"):
+        CapabilityArtifact.from_dict(payload)
+
+    payload = json.loads(artifact.to_json())
+    del payload["created_at"]
+    with pytest.raises(ValueError, match="required field"):
+        CapabilityArtifact.from_dict(payload)
+
+
+def test_locator_loader_rejects_more_than_four_fallbacks():
+    payload = {
+        "strategy": "css",
+        "value": "#balance-value",
+        "fallback": [
+            {"strategy": "css", "value": "#balance-value"} for _ in range(5)
+        ],
+    }
+
+    with pytest.raises(ValueError, match="at most four"):
+        Locator.from_dict(payload)
+
+
 def test_capability_rejects_invalid_typed_step_and_parameter_fields():
     artifact = CapabilityArtifact(
         capability_id="cap",
@@ -266,12 +303,29 @@ def test_capability_requires_extract_step_to_match_declared_output_source():
         surface_kind="browser",
         target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
         parameters={},
-        outputs={"value": OutputSpec("integer", "Value", Locator("css", "#one"))},
+        outputs={"value": OutputSpec("integer", "Value", Locator("css", "#balance-value"))},
         steps=(
-            ActionStep("extract", ActionType.EXTRACT, Locator("css", "#two"), "value"),
+            ActionStep("extract", ActionType.EXTRACT, Locator("css", "#confirm-action"), "value"),
         ),
         checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
     )
 
     with pytest.raises(ValueError, match="does not match its output source"):
+        artifact.validate()
+
+
+def test_capability_rejects_undeclared_placeholders_before_replay():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={},
+        outputs={},
+        steps=(ActionStep("wait", ActionType.WAIT, value="{{undeclared}}"),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+
+    with pytest.raises(ValueError, match="undeclared parameter"):
         artifact.validate()

@@ -4,13 +4,30 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
 import json
+import re
 from typing import Any, Mapping
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from .redaction import redact_text
 
 
 SUPPORTED_SCHEMA_VERSION = "1.0"
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_PARAMETER_PLACEHOLDER = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
+
+
+def _reject_unknown_fields(
+    value: Mapping[str, Any],
+    allowed: frozenset[str],
+    required: frozenset[str],
+    owner: str,
+) -> None:
+    unknown = [key for key in value if not isinstance(key, str) or key not in allowed]
+    if unknown:
+        raise ValueError(f"{owner} contains unknown field(s): {', '.join(map(str, unknown))}")
+    missing = sorted(required - set(value))
+    if missing:
+        raise ValueError(f"{owner} is missing required field(s): {', '.join(missing)}")
 
 
 class ActionType(StrEnum):
@@ -58,6 +75,12 @@ class Locator:
     def from_dict(cls, value: Mapping[str, Any]) -> "Locator":
         if not isinstance(value, Mapping):
             raise ValueError("locator must be an object")
+        _reject_unknown_fields(
+            value,
+            frozenset({"strategy", "value", "fallback", "rationale"}),
+            frozenset({"strategy", "value"}),
+            "locator",
+        )
         strategy = value.get("strategy")
         locator_value = value.get("value")
         if not isinstance(strategy, str) or strategy not in cls.SUPPORTED_STRATEGIES:
@@ -68,6 +91,8 @@ class Locator:
         rationale = value.get("rationale", "")
         if not isinstance(fallback, list):
             raise ValueError("locator fallback must be a list")
+        if len(fallback) > 4:
+            raise ValueError("locator fallback must contain at most four entries")
         if not isinstance(rationale, str):
             raise ValueError("locator rationale must be a string")
         return cls(
@@ -88,9 +113,15 @@ class ParameterSpec:
     def from_dict(cls, value: Mapping[str, Any]) -> "ParameterSpec":
         if not isinstance(value, Mapping):
             raise ValueError("parameter specification must be an object")
+        _reject_unknown_fields(
+            value,
+            frozenset({"type", "description", "required"}),
+            frozenset({"type", "description", "required"}),
+            "parameter specification",
+        )
         parameter_type = value.get("type")
         description = value.get("description")
-        required = value.get("required", True)
+        required = value.get("required")
         if not isinstance(parameter_type, str) or not isinstance(description, str):
             raise ValueError("parameter type and description must be strings")
         if not isinstance(required, bool):
@@ -109,9 +140,15 @@ class OutputSpec:
     def from_dict(cls, value: Mapping[str, Any]) -> "OutputSpec":
         if not isinstance(value, Mapping):
             raise ValueError("output specification must be an object")
+        _reject_unknown_fields(
+            value,
+            frozenset({"type", "description", "source", "sensitive"}),
+            frozenset({"type", "description", "source", "sensitive"}),
+            "output specification",
+        )
         output_type = value.get("type")
         description = value.get("description")
-        sensitive = value.get("sensitive", True)
+        sensitive = value.get("sensitive")
         if not isinstance(output_type, str) or not isinstance(description, str):
             raise ValueError("output type and description must be strings")
         if not isinstance(sensitive, bool):
@@ -156,11 +193,17 @@ class ActionStep:
     def from_dict(cls, value: Mapping[str, Any]) -> "ActionStep":
         if not isinstance(value, Mapping):
             raise ValueError("action step must be an object")
+        _reject_unknown_fields(
+            value,
+            frozenset({"id", "action", "target", "value", "risk", "timeout_ms", "description"}),
+            frozenset({"id", "action", "risk", "timeout_ms"}),
+            "action step",
+        )
         target = value.get("target")
         step_id = value.get("id")
         action = value.get("action")
-        risk = value.get("risk", RiskClass.SAFE.value)
-        timeout_ms = value.get("timeout_ms", 5_000)
+        risk = value.get("risk")
+        timeout_ms = value.get("timeout_ms")
         description = value.get("description", "")
         step_value = value.get("value")
         if not isinstance(step_id, str) or not step_id:
@@ -263,10 +306,24 @@ class CapabilityArtifact:
             raise ValueError("artifact_version must be at least 1")
         if not self.capability_id or not self.name:
             raise ValueError("capability_id and name are required")
+        if not isinstance(self.created_at, str) or not self.created_at:
+            raise ValueError("created_at must be a non-empty RFC3339 timestamp")
+        try:
+            timestamp = datetime.fromisoformat(self.created_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("created_at must be an RFC3339 timestamp") from exc
+        if timestamp.tzinfo is None:
+            raise ValueError("created_at must include a timezone")
         _validate_safe_metadata(self.capability_id, "capability_id")
         _validate_safe_metadata(self.surface_kind, "surface_kind")
+        if set(self.target) != {"url", "origin"}:
+            raise ValueError("target must contain only url and origin")
+        if not all(isinstance(item, str) for item in self.target.values()):
+            raise ValueError("target fields must be strings")
         if not self.target.get("url") or not self.target.get("origin"):
             raise ValueError("target must include url and origin")
+        _validate_uri(self.target["url"], "target url")
+        _validate_uri(self.target["origin"], "target origin")
         for target_name, target_value in self.target.items():
             _validate_safe_metadata(target_name, "target field name")
             if target_name not in {"url", "origin"}:
@@ -281,20 +338,30 @@ class CapabilityArtifact:
         ):
             _validate_safe_metadata(field_value, field_name)
         for name, spec in self.parameters.items():
+            if not isinstance(name, str) or _IDENTIFIER.fullmatch(name) is None:
+                raise ValueError(f"invalid parameter name: {name!r}")
             _validate_safe_metadata(name, "parameter name")
             if spec.type not in {"string", "integer"}:
                 raise ValueError(f"unsupported parameter type for {name}: {spec.type}")
+            if not spec.description or not isinstance(spec.required, bool):
+                raise ValueError(f"parameter {name} has invalid contract fields")
             _validate_safe_metadata(spec.description, f"parameter {name} description")
         for name, spec in self.outputs.items():
+            if not isinstance(name, str) or _IDENTIFIER.fullmatch(name) is None:
+                raise ValueError(f"invalid output name: {name!r}")
             _validate_safe_metadata(name, "output name")
             if spec.type not in {"string", "integer"}:
                 raise ValueError(f"unsupported output type for {name}: {spec.type}")
+            if not spec.description or not isinstance(spec.sensitive, bool):
+                raise ValueError(f"output {name} has invalid contract fields")
             _validate_safe_metadata(spec.description, f"output {name} description")
             if spec.source.strategy == "text":
                 raise ValueError(f"output source for {name} cannot use a text locator")
             _validate_locator_persistence(spec.source, f"output {name}")
         if not self.steps:
             raise ValueError("a capability must contain at least one step")
+        parameter_names = set(self.parameters)
+        _validate_placeholders(self.target["url"], parameter_names, "target URL")
         extracted_outputs: set[str] = set()
         for step in self.steps:
             if not step.id or step.timeout_ms < 1:
@@ -316,6 +383,10 @@ class CapabilityArtifact:
                 if step.target.strategy == "text":
                     raise ValueError(f"step {step.id} cannot persist a text locator")
                 _validate_locator_persistence(step.target, f"step {step.id}")
+            if step.value is not None:
+                _validate_placeholders(step.value, parameter_names, f"step {step.id} value")
+            if step.action is ActionType.FILL and _PARAMETER_PLACEHOLDER.fullmatch(step.value or "") is None:
+                raise ValueError(f"fill step {step.id} must use one declared parameter placeholder")
             if step.action is ActionType.EXTRACT:
                 if step.target is None or step.value not in self.outputs:
                     raise ValueError(f"extract step {step.id} must name a declared output")
@@ -343,8 +414,24 @@ class CapabilityArtifact:
 
     @classmethod
     def _from_dict(cls, value: Mapping[str, Any]) -> "CapabilityArtifact":
-        raw_parameters = value.get("parameters", {})
-        raw_outputs = value.get("outputs", {})
+        if not isinstance(value, Mapping):
+            raise ValueError("artifact must be an object")
+        _reject_unknown_fields(
+            value,
+            frozenset({
+                "schema_version", "artifact_version", "capability_id", "name", "description",
+                "surface_kind", "target", "parameters", "outputs", "steps", "checkpoint",
+                "business_outcomes", "created_at",
+            }),
+            frozenset({
+                "schema_version", "artifact_version", "capability_id", "name", "description",
+                "surface_kind", "target", "parameters", "outputs", "steps", "checkpoint",
+                "business_outcomes", "created_at",
+            }),
+            "capability artifact",
+        )
+        raw_parameters = value.get("parameters")
+        raw_outputs = value.get("outputs")
         raw_steps = value.get("steps")
         if not isinstance(raw_parameters, Mapping) or not isinstance(raw_outputs, Mapping):
             raise ValueError("parameters and outputs must be objects")
@@ -367,6 +454,12 @@ class CapabilityArtifact:
         checkpoint_value = value["checkpoint"]
         if not isinstance(checkpoint_value, Mapping):
             raise ValueError("checkpoint must be an object")
+        _reject_unknown_fields(
+            checkpoint_value,
+            frozenset({"kind", "value", "description"}),
+            frozenset({"kind", "value", "description"}),
+            "checkpoint",
+        )
         checkpoint_kind = checkpoint_value.get("kind")
         checkpoint_text = checkpoint_value.get("value")
         checkpoint_description = checkpoint_value.get("description")
@@ -385,10 +478,16 @@ class CapabilityArtifact:
             isinstance(key, str) and isinstance(item, str) for key, item in target.items()
         ):
             raise ValueError("target must be an object of string fields")
+        _reject_unknown_fields(
+            target,
+            frozenset({"url", "origin"}),
+            frozenset({"url", "origin"}),
+            "target",
+        )
         schema_version = value.get("schema_version", SUPPORTED_SCHEMA_VERSION)
         artifact_version = value.get("artifact_version", 1)
-        created_at = value.get("created_at", "")
-        raw_business_outcomes = value.get("business_outcomes", [])
+        created_at = value.get("created_at")
+        raw_business_outcomes = value.get("business_outcomes")
         if not isinstance(schema_version, str):
             raise ValueError("schema_version must be a string")
         if not isinstance(artifact_version, int) or isinstance(artifact_version, bool):
@@ -398,9 +497,15 @@ class CapabilityArtifact:
         if not isinstance(raw_business_outcomes, list):
             raise ValueError("business_outcomes must be a list")
         for item in raw_business_outcomes:
-            if not isinstance(item, Mapping) or not all(
-                isinstance(item.get(name), str) for name in ("code", "description", "detection_text")
-            ):
+            if not isinstance(item, Mapping):
+                raise ValueError("business outcomes must contain string fields")
+            _reject_unknown_fields(
+                item,
+                frozenset({"code", "description", "detection_text"}),
+                frozenset({"code", "description", "detection_text"}),
+                "business outcome",
+            )
+            if not all(isinstance(item.get(name), str) for name in ("code", "description", "detection_text")):
                 raise ValueError("business outcomes must contain string fields")
         artifact = cls(
             schema_version=schema_version,
@@ -431,7 +536,13 @@ class CapabilityArtifact:
 def _validate_locator_persistence(locator: Locator, owner: str) -> None:
     if locator.strategy not in Locator.SUPPORTED_STRATEGIES:
         raise ValueError(f"{owner} has an unsupported locator strategy: {locator.strategy}")
+    if len(locator.fallback) > 4:
+        raise ValueError(f"{owner} locator has more than four fallbacks")
     _validate_safe_metadata(locator.rationale, f"{owner} rationale")
+    if "{{" in locator.value or "}}" in locator.value:
+        raise ValueError(f"{owner} locator cannot contain parameter placeholders")
+    if locator.strategy == "text":
+        raise ValueError(f"{owner} cannot persist a text locator")
     if (
         locator.strategy == "css"
         and "href=" in locator.value
@@ -447,6 +558,8 @@ def _validate_locator_persistence(locator: Locator, owner: str) -> None:
         raise ValueError(f"{owner} link locator cannot persist a visible name")
     if redact_text(locator.value) != locator.value:
         raise ValueError(f"{owner} locator appears to contain sensitive text")
+    if not _is_allowlisted_demo_locator(locator):
+        raise ValueError(f"{owner} locator is not on the reviewed demo allowlist")
     for fallback in locator.fallback:
         _validate_locator_persistence(fallback, owner)
 
@@ -454,6 +567,56 @@ def _validate_locator_persistence(locator: Locator, owner: str) -> None:
 def _validate_safe_metadata(value: str, owner: str) -> None:
     if any(ord(character) > 127 for character in value):
         raise ValueError(f"{owner} contains unsafe free-form text")
+
+
+def _validate_uri(value: str, owner: str) -> None:
+    parsed = urlsplit(value)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError(f"{owner} must be a URI")
+
+
+_SAFE_DEMO_IDS = frozenset(
+    {
+        "balance-value",
+        "confirm-action",
+        "enter-nav",
+        "fetch-nav",
+        "form-nav",
+        "js-nav",
+        "member-number",
+        "search-action",
+        "shared-worker-constructor-nav",
+        "shared-worker-ws-nav",
+        "worker-constructor-nav",
+        "worker-ws-nav",
+        "ws-nav",
+    }
+)
+_SAFE_DEMO_LOCATORS = frozenset(
+    {
+        ("label", "Member ID"),
+        ("role", "button:Search"),
+        ("role", "input:Member ID"),
+        ("css", 'a[href="/"]'),
+        ("css", 'input[aria-label="Enter navigation"]'),
+    }
+)
+_CSS_ID = re.compile(r"^#([A-Za-z0-9_-]+)$|^\[id=\"([A-Za-z0-9_-]+)\"\]$")
+
+
+def _is_allowlisted_demo_locator(locator: Locator) -> bool:
+    if (locator.strategy, locator.value) in _SAFE_DEMO_LOCATORS:
+        return True
+    if locator.strategy != "css":
+        return False
+    match = _CSS_ID.fullmatch(locator.value)
+    return bool(match and next(group for group in match.groups() if group) in _SAFE_DEMO_IDS)
+
+
+def _validate_placeholders(value: str, parameter_names: set[str], owner: str) -> None:
+    for name in _PARAMETER_PLACEHOLDER.findall(value):
+        if name not in parameter_names:
+            raise ValueError(f"{owner} references undeclared parameter: {name}")
 
 
 class RunStatus(StrEnum):

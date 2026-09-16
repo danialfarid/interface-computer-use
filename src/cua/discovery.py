@@ -161,6 +161,8 @@ class DiscoveryRunner:
                     if callable(set_client_completed_outputs):
                         set_client_completed_outputs(set(self.output_sources))
                     decision = self.client.decide(goal, observation)
+                    if len(decision.actions) > 1:
+                        raise LLMError("decision.actions must contain at most one action")
                     provenance = getattr(self.client, "provenance", lambda: {})()
                     self.evidence.event(
                         "decision",

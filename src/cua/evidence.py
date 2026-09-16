@@ -67,8 +67,28 @@ def _redact_control_metadata(value: Any) -> Any:
         controls = result.get("controls")
         if isinstance(controls, list):
             for control in controls:
-                if isinstance(control, dict) and "name" in control:
-                    control["name"] = "<REDACTED>"
+                if isinstance(control, dict):
+                    if "name" in control:
+                        control["name"] = "<REDACTED>"
+                    if "kind" in control:
+                        control["kind"] = (
+                            control["kind"]
+                            if str(control["kind"]).casefold()
+                            in {"button", "checkbox", "combobox", "input", "link", "radio", "select", "textbox"}
+                            else "<REDACTED>"
+                        )
+        readable_targets = result.get("readable_targets")
+        if isinstance(readable_targets, list):
+            for target in readable_targets:
+                if isinstance(target, dict) and "locator" in target:
+                    target["locator"] = _redact_observation_locator(target["locator"])
+        if isinstance(controls, list):
+            for control in controls:
+                if isinstance(control, dict) and "locator" in control:
+                    control["locator"] = _redact_observation_locator(control["locator"])
+        target = result.get("target")
+        if isinstance(target, dict) and "strategy" in target:
+            result["target"] = _redact_observation_locator(target)
         if isinstance(result.get("text"), str) and "controls" in result:
             result["text"] = "<REDACTED>"
             if "title" in result:
@@ -97,6 +117,16 @@ def _redact_control_metadata(value: Any) -> Any:
     return value
 
 
+def _redact_observation_locator(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return "<REDACTED>"
+    result = {str(key): _redact_observation_locator(item) for key, item in value.items()}
+    if "strategy" in result:
+        result["value"] = "<REDACTED>"
+        result.pop("rationale", None)
+    return result
+
+
 def _redact_runtime_urls(value: Any) -> Any:
     if isinstance(value, dict):
         result = {str(key): _redact_runtime_urls(item) for key, item in value.items()}
@@ -115,7 +145,7 @@ def _redact_freeform_metadata(value: Any) -> Any:
 
     if isinstance(value, dict):
         result = {str(key): _redact_freeform_metadata(item) for key, item in value.items()}
-        for key in ("goal", "reason", "message", "description"):
+        for key in ("goal", "reason", "message", "description", "error", "observation_error"):
             if isinstance(result.get(key), str):
                 result[key] = "<REDACTED>"
         return result

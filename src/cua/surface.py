@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import hmac
 import json
 from pathlib import Path
 import re
+import secrets
 import time
 from typing import Any, Callable
 from urllib.parse import urljoin, urlsplit
@@ -95,6 +97,7 @@ class BrowserSurface:
         self._sensitive_values: set[str] = set()
         self._page_error: str | None = None
         self._failure_kind = "surface_failure"
+        self._snapshot_id_key = secrets.token_bytes(32)
         self.page.on("dialog", self._handle_dialog)
         self.page.on("pageerror", self._handle_page_error)
 
@@ -183,10 +186,20 @@ class BrowserSurface:
                 raise PolicyViolation("redirect responses are not permitted by the route allowlist")
             route.fulfill(response=response)
             return
-        except Exception as exc:
+        except PolicyViolation as exc:
             self._blocked_navigation_error = exc
             self._failure_kind = "policy_blocked"
-            route.abort(error_code="blockedbyclient")
+            try:
+                route.abort(error_code="blockedbyclient")
+            except Exception:
+                pass
+            return
+        except Exception as exc:
+            self._blocked_navigation_error = _normalize_network_error(exc, "browser request")
+            try:
+                route.abort(error_code="failed")
+            except Exception:
+                pass
             return
         route.continue_()
 
@@ -198,12 +211,23 @@ class BrowserSurface:
             return
         try:
             self._navigation_guard(_websocket_policy_url(str(websocket.url)))
-        except Exception as exc:
+            websocket.connect_to_server()
+            return
+        except PolicyViolation as exc:
             self._blocked_navigation_error = exc
             self._failure_kind = "policy_blocked"
-            websocket.close(code=1008, reason="WebSocket URL is not allowlisted")
+            try:
+                websocket.close(code=1008, reason="WebSocket URL is not allowlisted")
+            except Exception:
+                pass
             return
-        websocket.connect_to_server()
+        except Exception as exc:
+            self._blocked_navigation_error = _normalize_network_error(exc, "WebSocket request")
+            try:
+                websocket.close(code=1011, reason="WebSocket request failed")
+            except Exception:
+                pass
+            return
 
     def observe(self) -> SurfaceObservation:
         try:
@@ -529,11 +553,12 @@ class BrowserSurface:
               return visit(body, 0);
             }"""
         )
+        snapshot_id_key = getattr(self, "_snapshot_id_key", None) or secrets.token_bytes(32)
         snapshot.write_text(
             json.dumps(
                 {
                     "failure_kind": getattr(self, "_failure_kind", "surface_failure"),
-                    "structure": _sanitize_snapshot_structure(structure),
+                    "structure": _sanitize_snapshot_structure(structure, snapshot_id_key),
                 },
                 sort_keys=True,
             ),
@@ -542,20 +567,49 @@ class BrowserSurface:
         return None, snapshot
 
 
-def _sanitize_snapshot_structure(value: Any) -> Any:
+_SAFE_SNAPSHOT_ROLES = frozenset(
+    {
+        "",
+        "alert",
+        "button",
+        "cell",
+        "checkbox",
+        "columnheader",
+        "combobox",
+        "heading",
+        "link",
+        "listbox",
+        "option",
+        "radio",
+        "row",
+        "rowheader",
+        "searchbox",
+        "status",
+        "tab",
+        "textbox",
+        "treeitem",
+    }
+)
+
+
+def _sanitize_snapshot_structure(value: Any, snapshot_id_key: bytes) -> Any:
     if isinstance(value, dict):
         allowed = {"tag", "id", "role", "state", "error_marker", "children"}
         result = {
-            key: _sanitize_snapshot_structure(item)
+            key: _sanitize_snapshot_structure(item, snapshot_id_key)
             for key, item in value.items()
             if key in allowed
         }
+        if isinstance(result.get("role"), str) and result["role"].casefold() not in _SAFE_SNAPSHOT_ROLES:
+            result.pop("role")
         if isinstance(result.get("id"), str):
             raw_id = result.pop("id")
-            result["id_hash"] = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()[:16]
+            result["id_hash"] = hmac.new(
+                snapshot_id_key, raw_id.encode("utf-8"), hashlib.sha256
+            ).hexdigest()[:16]
         return result
     if isinstance(value, list):
-        return [_sanitize_snapshot_structure(item) for item in value]
+        return [_sanitize_snapshot_structure(item, snapshot_id_key) for item in value]
     return value
 
 
@@ -617,6 +671,12 @@ def _websocket_policy_url(value: str) -> str:
         scheme="https" if parsed.scheme == "wss" else "http",
         fragment="",
     ).geturl()
+
+
+def _normalize_network_error(error: Exception, operation: str) -> SurfaceError:
+    if "timeout" in f"{type(error).__name__} {error}".lower():
+        return SurfaceTimeout(f"{operation} timed out")
+    return SurfaceError(f"{operation} failed")
 
 
 def _quote_css(value: str) -> str:

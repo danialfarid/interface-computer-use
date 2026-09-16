@@ -45,6 +45,39 @@ def test_evidence_redacts_sensitive_observation_payloads(tmp_path):
     assert "85" not in json.dumps(record["payload"])
 
 
+def test_evidence_redacts_lowercase_ascii_locator_attributes(tmp_path):
+    evidence = EvidenceRecorder(tmp_path)
+    evidence.event(
+        "observation",
+        observation={
+            "controls": [
+                {
+                    "kind": "textbox",
+                    "name": "alice smith",
+                    "locator": {"strategy": "label", "value": "alice smith"},
+                }
+            ]
+        },
+    )
+
+    record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
+    assert "alice smith" not in json.dumps(record["payload"])
+
+
+def test_evidence_redacts_action_locator_values(tmp_path):
+    evidence = EvidenceRecorder(tmp_path)
+    evidence.event(
+        "human_action",
+        step={
+            "action": "click",
+            "target": {"strategy": "role", "value": "button:alice smith"},
+        },
+    )
+
+    record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
+    assert "alice smith" not in json.dumps(record["payload"])
+
+
 def test_evidence_redacts_readable_target_text_without_capitalization(tmp_path):
     evidence = EvidenceRecorder(tmp_path)
     evidence.event(

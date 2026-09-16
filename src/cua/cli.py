@@ -85,7 +85,10 @@ def _run_discover(args: argparse.Namespace) -> int:
     target_url = args.target_url
     evidence = EvidenceRecorder(args.evidence_dir)
     parsed = urlparse(target_url)
-    policy = GuardrailPolicy.local_demo(f"{parsed.scheme}://{parsed.netloc}")
+    target_origin = f"{parsed.scheme}://{parsed.netloc}"
+    if target_origin != DEFAULT_ORIGIN:
+        raise ValueError(f"discover target origin must be the approved demo origin: {DEFAULT_ORIGIN}")
+    policy = GuardrailPolicy.local_demo(DEFAULT_ORIGIN)
     policy.check_url(target_url)
     demo_server = _ensure_demo_server(target_url)
     browser = BrowserSurface.open(
@@ -100,7 +103,11 @@ def _run_discover(args: argparse.Namespace) -> int:
         if coordinator is not None:
             handoff_server = HandoffServer(coordinator)
             handoff_server.start()
-            print(f"operator handoff: {handoff_server.url}/interventions", flush=True)
+            print(
+                f"operator handoff: {handoff_server.url}/interventions "
+                f"(X-CUA-Handoff-Token: {coordinator.access_token})",
+                flush=True,
+            )
         client = OpenAICompatibleClient(model=args.model)
         goal = args.goal.replace("{member_id}", args.member_id)
         result, artifact = DiscoveryRunner(
@@ -156,7 +163,11 @@ def _run_replay(args: argparse.Namespace) -> int:
         if coordinator is not None:
             handoff_server = HandoffServer(coordinator)
             handoff_server.start()
-            print(f"operator handoff: {handoff_server.url}/interventions", flush=True)
+            print(
+                f"operator handoff: {handoff_server.url}/interventions "
+                f"(X-CUA-Handoff-Token: {coordinator.access_token})",
+                flush=True,
+            )
         result = ReplayRunner(
             browser,
             policy,

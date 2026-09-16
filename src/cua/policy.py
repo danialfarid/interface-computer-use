@@ -49,6 +49,9 @@ class GuardrailPolicy:
 
     @classmethod
     def local_demo(cls, origin: str) -> "GuardrailPolicy":
+        parsed = urlparse(origin)
+        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+            raise ValueError("local_demo policy only accepts a loopback HTTP origin")
         return cls(
             allowed_origins=(origin,),
             allowed_route_prefixes=("/", "/member", "/runtime"),

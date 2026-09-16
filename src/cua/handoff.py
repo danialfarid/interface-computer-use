@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hmac
 import json
+import secrets
 import threading
 import time
 from typing import Any, Callable
 import uuid
 
 from .evidence import EvidenceRecorder
-from .models import ActionStep, ActionType, Locator, RiskClass
+from .models import ActionStep, ActionType, Locator, RiskClass, _validate_locator_persistence
 from .policy import ConfirmationRequired, GuardrailPolicy, PolicyViolation, check_action_destination
 from .surface import SurfaceError, SurfaceObservation
 
@@ -41,16 +43,16 @@ class InterventionRequest:
         return {
             "intervention_id": self.intervention_id,
             "run_id": self.run_id,
-            "goal": self.goal,
+            "goal": "<REDACTED>",
             "capability_id": self.capability_id,
             "step": self.step,
-            "reason": self.reason,
+            "reason": "<REDACTED>",
             "state": self.state,
             "current_url": self.current_url,
             "observation": self.observation,
             "screenshot": self.screenshot,
             "snapshot": self.snapshot,
-            "operator": self.operator,
+            "operator": "operator" if self.operator is not None else None,
             "human_actions": self.human_actions,
         }
 
@@ -74,6 +76,7 @@ class HandoffCoordinator:
         self._requests: dict[str, InterventionRequest] = {}
         self._condition = threading.Condition()
         self._owner_thread_id = threading.get_ident()
+        self.access_token = secrets.token_urlsafe(32)
         self._pending_actions: list[_PendingHumanAction] = []
         self._deadlines: dict[str, float] = {}
         self.on_human_action: Callable[[ActionStep], None] | None = None
@@ -101,10 +104,10 @@ class HandoffCoordinator:
         request = InterventionRequest(
             intervention_id=uuid.uuid4().hex,
             run_id=self.evidence.run_id,
-            goal=goal,
+            goal="Complete the approved capability.",
             capability_id=capability_id,
             step=step,
-            reason=reason,
+            reason="Automation requires operator intervention.",
             state=HandoffState.REQUESTED,
             current_url=self.evidence.redact_url(observation.url),
             observation=self.evidence.redact_payload(observation.to_dict()),
@@ -134,9 +137,9 @@ class HandoffCoordinator:
             if request.state != HandoffState.REQUESTED:
                 raise RuntimeError(f"intervention is {request.state}, not requested")
             request.state = HandoffState.HUMAN_CONTROL
-            request.operator = operator
+            request.operator = "operator"
             self._condition.notify_all()
-        self.evidence.event("control_transferred", intervention_id=intervention_id, operator=operator)
+        self.evidence.event("control_transferred", intervention_id=intervention_id, operator="operator")
         return request
 
     def record_human_action(
@@ -202,6 +205,8 @@ class HandoffCoordinator:
             pending.step,
             id=f"human-action-{len(request.human_actions) + 1}",
         )
+        if safe_step.target is not None:
+            _validate_locator_persistence(safe_step.target, "human action")
         self.policy.check_step(safe_step, confirmed=pending.confirmed)
         check_action_destination(self.policy, self.surface, safe_step)
         extracted: str | None = None
@@ -339,13 +344,24 @@ class HandoffServer:
                 length = int(self.headers.get("Content-Length", "0"))
                 return json.loads(self.rfile.read(length) or b"{}")
 
+            def _authorized(self) -> bool:
+                supplied = self.headers.get("X-CUA-Handoff-Token", "")
+                if hmac.compare_digest(supplied, coordinator.access_token):
+                    return True
+                self._json(401, {"error": "invalid handoff token"})
+                return False
+
             def do_GET(self) -> None:  # noqa: N802
+                if not self._authorized():
+                    return
                 if self.path != "/interventions":
                     self._json(404, {"error": "not found"})
                     return
                 self._json(200, {"interventions": [item.to_dict() for item in coordinator.list_requests()]})
 
             def do_POST(self) -> None:  # noqa: N802
+                if not self._authorized():
+                    return
                 parts = self.path.strip("/").split("/")
                 if len(parts) != 3 or parts[0] != "interventions":
                     self._json(404, {"error": "not found"})
@@ -382,7 +398,13 @@ class HandoffServer:
                         return
                     self._json(200, result.to_dict())
                 except (KeyError, ValueError, PolicyViolation, ConfirmationRequired, SurfaceError, RuntimeError) as exc:
-                    self._json(400, {"error": str(exc)})
+                    message = str(exc)
+                    # Keep the one type-validation message useful while not
+                    # reflecting arbitrary locator/operator/application text.
+                    safe_message = (
+                        message if message == "confirmed must be a boolean" else "request rejected"
+                    )
+                    self._json(400, {"error": safe_message})
 
             def log_message(self, _format: str, *_args: object) -> None:
                 return
