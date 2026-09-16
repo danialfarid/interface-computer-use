@@ -1,0 +1,99 @@
+{
+  "artifact_version": 1,
+  "business_outcomes": [
+    {
+      "code": "MEMBER_NOT_FOUND",
+      "description": "The portal reported that no member matched the supplied identifier.",
+      "detection_text": "Member not found"
+    },
+    {
+      "code": "VALIDATION_ERROR",
+      "description": "The portal rejected the supplied member identifier.",
+      "detection_text": "Validation error"
+    },
+    {
+      "code": "PERMISSION_DENIED",
+      "description": "The operator is not permitted to view this member.",
+      "detection_text": "Permission denied"
+    },
+    {
+      "code": "SESSION_EXPIRED",
+      "description": "The portal session expired before the lookup completed.",
+      "detection_text": "Session expired"
+    }
+  ],
+  "capability_id": "member-balance-v1",
+  "checkpoint": {
+    "description": "The member details panel is visible.",
+    "kind": "text_present",
+    "value": "Member details"
+  },
+  "created_at": "2026-09-16T20:15:33.458810+00:00",
+  "description": "Find a member in the synthetic member services console and read the current savings balance.",
+  "name": "Read member balance",
+  "outputs": {
+    "current_savings_balance": {
+      "description": "Current savings balance displayed by the portal.",
+      "sensitive": true,
+      "source": {
+        "rationale": "Stable author-provided id for a readable output target.",
+        "strategy": "css",
+        "value": "[id=\"balance-value\"]"
+      },
+      "type": "string"
+    }
+  },
+  "parameters": {
+    "member_id": {
+      "description": "Synthetic member identifier supplied by the caller.",
+      "required": true,
+      "type": "string"
+    }
+  },
+  "schema_version": "1.0",
+  "steps": [
+    {
+      "action": "fill",
+      "description": "Fill the identified control.",
+      "id": "step-1-1",
+      "risk": "safe",
+      "target": {
+        "rationale": "Author-provided element id is the most stable available control locator.",
+        "strategy": "css",
+        "value": "[id=\"member-number\"]"
+      },
+      "timeout_ms": 5000,
+      "value": "{{member_id}}"
+    },
+    {
+      "action": "click",
+      "description": "Click the identified control.",
+      "id": "step-2-1",
+      "risk": "safe",
+      "target": {
+        "rationale": "Author-provided element id is the most stable available control locator.",
+        "strategy": "css",
+        "value": "[id=\"search-action\"]"
+      },
+      "timeout_ms": 5000
+    },
+    {
+      "action": "extract",
+      "description": "Extract the declared output.",
+      "id": "step-3-1",
+      "risk": "safe",
+      "target": {
+        "rationale": "Stable author-provided id for a readable output target.",
+        "strategy": "css",
+        "value": "[id=\"balance-value\"]"
+      },
+      "timeout_ms": 5000,
+      "value": "current_savings_balance"
+    }
+  ],
+  "surface_kind": "browser",
+  "target": {
+    "origin": "http://127.0.0.1:58110",
+    "url": "http://127.0.0.1:58110/"
+  }
+}

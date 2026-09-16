@@ -62,7 +62,7 @@ PYTHONPATH=src .venv/bin/python -m cua.cli replay \
   --evidence-dir evidence/not-found-replay
 ```
 
-The committed [example evidence](evidence/example/README.md) was made with the real local browser surface and an offline scripted decision client so the repository can be tested without a paid service. The committed `evidence/live-discovery-2/` and `evidence/live-replay/` directories contain one redacted provider-backed discovery and its deterministic replay. No key or raw screenshot is persisted.
+The committed [example evidence](evidence/example/README.md) was made with the real local browser surface and an offline scripted decision client so the repository can be tested without a paid service. The committed `evidence/live-discovery-2/` and `evidence/live-replay/` directories contain redacted provider-backed discovery/replay evidence; each current fixture has a manifest with its code revision and artifact hash. No key or raw screenshot is persisted.
 
 ## Handoff
 
