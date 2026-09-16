@@ -28,7 +28,7 @@
     "kind": "text_present",
     "value": "Member details"
   },
-  "created_at": "2026-09-16T20:15:33.458810+00:00",
+  "created_at": "2026-09-16T20:47:40.640864+00:00",
   "description": "Find a member in the synthetic member services console and read the current savings balance.",
   "name": "Read member balance",
   "outputs": {
@@ -93,7 +93,7 @@
   ],
   "surface_kind": "browser",
   "target": {
-    "origin": "http://127.0.0.1:58110",
-    "url": "http://127.0.0.1:58110/"
+    "origin": "http://127.0.0.1:49482",
+    "url": "http://127.0.0.1:49482/"
   }
 }

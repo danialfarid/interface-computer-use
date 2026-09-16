@@ -1,0 +1,9 @@
+{
+  "artifact_sha256": "12370c668b9e5129328a83bdb335504387a301fb3e92e0d0c67f0c19bd144f89",
+  "code_revision": "2e3a56c6ccc8ca33340ab5e310a1d9716b0d3930",
+  "mode": "provider-backed discovery",
+  "model": "gpt-4o-mini",
+  "provider_endpoint_host": "api.openai.com",
+  "run_id": "9f81ee66f1b94f878c4579b3a9773a7d",
+  "surface": "synthetic portal on an ephemeral loopback port"
+}

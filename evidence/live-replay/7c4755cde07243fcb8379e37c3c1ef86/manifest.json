@@ -1,8 +1,0 @@
-{
-  "code_revision": "54e2778e84d21755f4cf39eeb3e0efcfe03658bd",
-  "mode": "deterministic replay",
-  "run_id": "7c4755cde07243fcb8379e37c3c1ef86",
-  "source_artifact": "4f1b7fc920bd40588064801a6368e5c0/artifact.json",
-  "source_artifact_sha256": "235b43e3e17bd6e78ff8572a4180717990fbccf1fa85f7e61d64c444441833bb",
-  "surface": "synthetic portal on an ephemeral loopback port"
-}
