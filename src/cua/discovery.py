@@ -160,6 +160,11 @@ class DiscoveryRunner:
                     set_client_completed_outputs = getattr(self.client, "set_completed_outputs", None)
                     if callable(set_client_completed_outputs):
                         set_client_completed_outputs(set(self.output_sources))
+                    set_client_last_action = getattr(self.client, "set_last_action", None)
+                    if callable(set_client_last_action):
+                        set_client_last_action(
+                            self.recorded_steps[-1].action if self.recorded_steps else None
+                        )
                     decision = self.client.decide(goal, observation)
                     if len(decision.actions) > 1:
                         raise LLMError("decision.actions must contain at most one action")
