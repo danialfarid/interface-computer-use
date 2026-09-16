@@ -1,6 +1,6 @@
 import pytest
 
-from cua.cli import _coerce_inputs, _parse_inputs, main
+from cua.cli import _coerce_inputs, _parse_inputs, _remap_to_approved_demo, main
 from cua.models import ParameterSpec
 
 
@@ -28,3 +28,28 @@ def test_discovery_cli_pins_the_target_to_the_synthetic_origin(tmp_path):
             str(tmp_path),
         ]
     ) == 1
+
+
+def test_cli_only_remaps_a_credential_free_loopback_root():
+    payload = {
+        "target": {
+            "origin": "http://127.0.0.1:58110",
+            "url": "http://127.0.0.1:58110/",
+        },
+        "other": "unchanged",
+    }
+
+    remapped = _remap_to_approved_demo(payload)
+    assert remapped["target"] == {
+        "origin": "http://127.0.0.1:8765",
+        "url": "http://127.0.0.1:8765/",
+    }
+    with pytest.raises(ValueError):
+        _remap_to_approved_demo(
+            {
+                "target": {
+                    "origin": "http://127.0.0.1:58110",
+                    "url": "http://127.0.0.1:58110/?member=1001",
+                }
+            }
+        )

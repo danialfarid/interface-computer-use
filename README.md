@@ -53,6 +53,10 @@ PYTHONPATH=src .venv/bin/python -m cua.cli replay \
   --evidence-dir evidence/live-replay
 ```
 
+Evidence captured on an ephemeral loopback port can be explicitly normalized to
+the fixed approved demo origin with `--remap-to-approved-demo`; the flag accepts
+only a credential-free loopback root URL and never broadens the allowlist.
+
 The expected business outcome path is also deterministic:
 
 ```bash

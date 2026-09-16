@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from .demo_app import serve
@@ -47,6 +47,11 @@ def main(argv: list[str] | None = None) -> int:
     replay.add_argument("--artifact", type=Path, required=True)
     replay.add_argument("--input", action="append", default=[], metavar="NAME=VALUE")
     replay.add_argument("--evidence-dir", type=Path, default=Path("evidence"))
+    replay.add_argument(
+        "--remap-to-approved-demo",
+        action="store_true",
+        help="remap a loopback root artifact target to the fixed demo origin",
+    )
     replay.add_argument("--handoff", action="store_true", help="start the localhost operator handoff API")
     replay.add_argument("--handoff-wait", type=float, default=300.0)
     replay.add_argument("--headed", action="store_true")
@@ -135,7 +140,10 @@ def _run_discover(args: argparse.Namespace) -> int:
 
 
 def _run_replay(args: argparse.Namespace) -> int:
-    artifact = CapabilityArtifact.from_dict(json.loads(args.artifact.read_text(encoding="utf-8")))
+    artifact_payload = json.loads(args.artifact.read_text(encoding="utf-8"))
+    if args.remap_to_approved_demo:
+        artifact_payload = _remap_to_approved_demo(artifact_payload)
+    artifact = CapabilityArtifact.from_dict(artifact_payload)
     inputs = _coerce_inputs(_parse_inputs(args.input), artifact)
     target_url = artifact.target["url"]
     try:
@@ -186,6 +194,49 @@ def _run_replay(args: argparse.Namespace) -> int:
         if demo_server is not None:
             demo_server.shutdown()
             demo_server.server_close()
+
+
+def _remap_to_approved_demo(payload: dict[str, object]) -> dict[str, object]:
+    """Allow only an explicit loopback-root to fixed-demo remap.
+
+    This is useful for evidence captured on an ephemeral local port. It cannot
+    turn an artifact for a real host, a credential-bearing URL, or a URL with
+    caller data into an approved target.
+    """
+
+    if not isinstance(payload, dict):
+        raise ValueError("artifact must be an object")
+    target = payload.get("target")
+    if not isinstance(target, dict):
+        raise ValueError("artifact target must be an object")
+    source_url = target.get("url")
+    source_origin = target.get("origin")
+    if not isinstance(source_url, str) or not isinstance(source_origin, str):
+        raise ValueError("artifact target requires URL and origin")
+    parsed_url = urlsplit(source_url)
+    parsed_origin = urlsplit(source_origin)
+    if (
+        parsed_url.scheme != "http"
+        or parsed_origin.scheme != "http"
+        or parsed_url.hostname not in {"127.0.0.1", "localhost"}
+        or parsed_origin.hostname not in {"127.0.0.1", "localhost"}
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or parsed_origin.username is not None
+        or parsed_origin.password is not None
+        or parsed_url.path != "/"
+        or parsed_url.query
+        or parsed_url.fragment
+        or source_origin != f"{parsed_origin.scheme}://{parsed_origin.netloc}"
+        or f"{parsed_url.scheme}://{parsed_url.netloc}" != source_origin
+    ):
+        raise ValueError("only a credential-free loopback root target can be remapped")
+    remapped = dict(payload)
+    remapped_target = dict(target)
+    remapped_target["origin"] = DEFAULT_ORIGIN
+    remapped_target["url"] = urlunsplit(("http", "127.0.0.1:8765", "/", "", ""))
+    remapped["target"] = remapped_target
+    return remapped
 
 
 def _parse_inputs(items: list[str]) -> dict[str, str]:
