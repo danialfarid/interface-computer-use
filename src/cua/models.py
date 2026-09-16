@@ -6,7 +6,7 @@ from enum import StrEnum
 import json
 import re
 from typing import Any, Mapping
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from .redaction import redact_text
 
@@ -324,6 +324,7 @@ class CapabilityArtifact:
             raise ValueError("target must include url and origin")
         _validate_uri(self.target["url"], "target url")
         _validate_uri(self.target["origin"], "target origin")
+        _validate_parameterized_query(self.target["url"], "target url")
         for target_name, target_value in self.target.items():
             _validate_safe_metadata(target_name, "target field name")
             if target_name not in {"url", "origin"}:
@@ -385,6 +386,8 @@ class CapabilityArtifact:
                 _validate_locator_persistence(step.target, f"step {step.id}")
             if step.value is not None:
                 _validate_placeholders(step.value, parameter_names, f"step {step.id} value")
+                if step.action is ActionType.NAVIGATE:
+                    _validate_parameterized_query(step.value, f"step {step.id} value")
             if step.action is ActionType.FILL and _PARAMETER_PLACEHOLDER.fullmatch(step.value or "") is None:
                 raise ValueError(f"fill step {step.id} must use one declared parameter placeholder")
             if step.action is ActionType.EXTRACT:
@@ -573,6 +576,12 @@ def _validate_uri(value: str, owner: str) -> None:
     parsed = urlsplit(value)
     if not parsed.scheme or not parsed.netloc:
         raise ValueError(f"{owner} must be a URI")
+
+
+def _validate_parameterized_query(value: str, owner: str) -> None:
+    for _key, item in parse_qsl(urlsplit(value).query, keep_blank_values=True):
+        if _PARAMETER_PLACEHOLDER.fullmatch(item) is None:
+            raise ValueError(f"{owner} query values must be declared placeholders")
 
 
 _SAFE_DEMO_IDS = frozenset(

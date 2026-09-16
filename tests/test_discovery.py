@@ -5,7 +5,13 @@ import time
 
 import pytest
 
-from cua.discovery import DiscoveryRunner, DiscoveryTemplate, _parameterize_text, _parameterize_url
+from cua.discovery import (
+    DiscoveryRunner,
+    DiscoveryTemplate,
+    _parameterize_persisted_value,
+    _parameterize_text,
+    _parameterize_url,
+)
 from cua.evidence import EvidenceRecorder
 from cua.handoff import HandoffCoordinator
 from cua.llm import AgentAction, AgentDecision, LLMError, ScriptedDecisionClient
@@ -22,7 +28,7 @@ from cua.models import (
 )
 from cua.policy import GuardrailPolicy
 from cua.replay import ReplayRunner
-from cua.surface import Control, ReadableTarget, SurfaceAppError, SurfaceObservation
+from cua.surface import Control, ReadableTarget, SurfaceAppError, SurfaceError, SurfaceObservation
 
 
 class FakeSurface:
@@ -614,3 +620,12 @@ def test_discovery_rejects_sensitive_target_query_values(tmp_path):
     assert result.status is RunStatus.HARD_FAILURE
     assert result.error_code == "INVALID_ARTIFACT"
     assert artifact is None
+
+
+def test_discovery_rejects_unparameterized_target_query_values():
+    with pytest.raises(SurfaceError, match="unparameterized navigation query data"):
+        _parameterize_persisted_value(
+            "http://127.0.0.1:8765/?note=alice-smith",
+            {"member_id": "1001"},
+            ActionType.NAVIGATE,
+        )

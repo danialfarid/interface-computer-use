@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any
 from urllib.parse import quote, quote_plus, unquote
 import uuid
@@ -31,10 +32,24 @@ def _redact_sensitive_values(value: Any, sensitive_values: set[str]) -> Any:
             for variant in (item, quote(item, safe=""), quote_plus(item))
         }
         for secret in sorted(variants, key=len, reverse=True):
-            result = result.replace(secret, "<REDACTED>")
+            if not secret:
+                continue
+            result = re.sub(
+                rf"(?<![\w-]){re.escape(secret)}(?![\w-])",
+                "<REDACTED>",
+                result,
+            )
         return result
     if isinstance(value, dict):
-        return {str(key): _redact_sensitive_values(item, sensitive_values) for key, item in value.items()}
+        result = {}
+        structural_keys = {"id", "run_id", "capability_id", "intervention_id", "failed_step"}
+        for key, item in value.items():
+            key_text = str(key)
+            if key_text in structural_keys and isinstance(item, str):
+                result[key_text] = item
+            else:
+                result[key_text] = _redact_sensitive_values(item, sensitive_values)
+        return result
     if isinstance(value, list):
         return [_redact_sensitive_values(item, sensitive_values) for item in value]
     return value

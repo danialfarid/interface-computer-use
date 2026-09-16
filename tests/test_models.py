@@ -251,6 +251,45 @@ def test_capability_rejects_query_data_in_css_link_locator():
         artifact.validate()
 
 
+def test_capability_rejects_unparameterized_target_query_values():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={
+            "origin": "http://127.0.0.1:8765",
+            "url": "http://127.0.0.1:8765/?note=alice-smith",
+        },
+        parameters={"member_id": ParameterSpec("string", "Member identifier")},
+        outputs={},
+        steps=(ActionStep("wait", ActionType.WAIT),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+
+    with pytest.raises(ValueError, match="query values must be declared placeholders"):
+        artifact.validate()
+
+
+def test_capability_allows_parameterized_target_query_values():
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={
+            "origin": "http://127.0.0.1:8765",
+            "url": "http://127.0.0.1:8765/?member={{member_id}}",
+        },
+        parameters={"member_id": ParameterSpec("string", "Member identifier")},
+        outputs={},
+        steps=(ActionStep("wait", ActionType.WAIT),),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+
+    artifact.validate()
+
+
 def test_capability_rejects_empty_business_outcome_fields():
     artifact = CapabilityArtifact(
         capability_id="cap",

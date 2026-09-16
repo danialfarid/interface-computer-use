@@ -61,12 +61,11 @@ def redact_value(name: str, value: Any) -> Any:
 
 
 def redact_url(value: str) -> str:
-    """Preserve a target route while removing sensitive query values."""
+    """Preserve a target route while removing all non-placeholder query values."""
 
     parsed = urlsplit(value)
-    sensitive = _SENSITIVE_FIELDS
     query = [
-        (key, "<REDACTED>" if sensitive.match(key) else item)
+        (key, item if _PLACEHOLDER.fullmatch(item) else "<REDACTED>")
         for key, item in parse_qsl(parsed.query, keep_blank_values=True)
     ]
     safe_netloc = parsed.netloc.rsplit("@", 1)[-1]

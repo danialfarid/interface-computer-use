@@ -723,8 +723,10 @@ def _parameterize_persisted_value(
     if action is ActionType.FILL and not _PARAMETER.fullmatch(result):
         if value not in parameter_values.values():
             raise SurfaceError("refusing to persist an unparameterized fill value")
-    if action is ActionType.NAVIGATE and redact_url(result) != result:
-        raise SurfaceError("refusing to persist a navigation containing credentials or a secret")
+    if action is ActionType.NAVIGATE:
+        _reject_unparameterized_query(result)
+        if redact_url(result) != result:
+            raise SurfaceError("refusing to persist a navigation containing credentials or a secret")
     return result
 
 
@@ -748,3 +750,9 @@ def _parameterize_url(value: str, parameter_values: dict[str, str]) -> str:
             parsed.fragment,
         )
     )
+
+
+def _reject_unparameterized_query(value: str) -> None:
+    for _key, item in parse_qsl(urlsplit(value).query, keep_blank_values=True):
+        if _PARAMETER.fullmatch(item) is None:
+            raise SurfaceError("refusing to persist unparameterized navigation query data")

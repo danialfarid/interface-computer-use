@@ -160,6 +160,23 @@ def test_evidence_redacts_uri_encoded_sensitive_values(tmp_path):
     assert "ab%20cd" not in json.dumps(record["payload"])
 
 
+def test_short_sensitive_values_do_not_corrupt_structural_identifiers(tmp_path):
+    evidence = EvidenceRecorder(tmp_path)
+    evidence.sensitive_values.add("1")
+    evidence.event(
+        "action",
+        capability_id="member-balance-v1",
+        step={"id": "step-1-1", "action": "wait", "timeout_ms": 1},
+        value="1",
+    )
+
+    record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
+    payload = record["payload"]
+    assert payload["capability_id"] == "member-balance-v1"
+    assert payload["step"]["id"] == "step-1-1"
+    assert payload["value"] == "<REDACTED>"
+
+
 def test_redaction_masks_named_sensitive_scalar_values_including_numbers():
     value = {
         "member_id": 1001,
@@ -194,7 +211,8 @@ def test_artifact_redaction_preserves_executable_fields_while_removing_url_crede
 
     assert "demo_user" not in redacted["target"]["url"]
     assert "synthetic_password" not in redacted["target"]["url"]
-    assert "member=1001" in redacted["target"]["url"]
+    assert "member=1001" not in redacted["target"]["url"]
+    assert "member=" in redacted["target"]["url"]
     assert redacted["steps"][0]["target"]["value"] == "Member Number"
     assert redacted["steps"][0]["value"] == "{{member_id}}"
 
