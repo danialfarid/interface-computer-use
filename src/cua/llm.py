@@ -4,17 +4,32 @@ from dataclasses import dataclass
 import json
 import os
 from typing import Any, Protocol
-from urllib.parse import quote, quote_plus
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 
 from .models import ActionType, RiskClass
-from .redaction import redact_runtime_url, redact_text
 from .surface import SurfaceObservation
 
 
 class LLMError(RuntimeError):
     """The model could not return a valid, policy-checkable decision."""
+
+
+_SAFE_MODEL_LABELS = frozenset(
+    {
+        "member id",
+        "search",
+        "return to lookup",
+        "member details",
+        "current savings balance",
+        "member services console",
+    }
+)
+_SAFE_MODEL_PATHS = frozenset({"/", "/member"})
+_SAFE_MODEL_KINDS = frozenset(
+    {"button", "checkbox", "combobox", "input", "link", "radio", "select", "textbox"}
+)
 
 
 DECISION_JSON_SCHEMA: dict[str, Any] = {
@@ -153,8 +168,8 @@ class OpenAICompatibleClient:
             "CUA_LLM_ENDPOINT", "https://api.openai.com/v1/chat/completions"
         )
         self.timeout_s = timeout_s
-        self._sensitive_values: set[str] = set()
-        self._parameter_values: dict[str, str] = {}
+        self._parameter_names: set[str] = set()
+        self._task_outputs: set[str] = set()
         self._completed_outputs: set[str] = set()
         self._last_provenance: dict[str, Any] = {
             "decision_source": "provider",
@@ -164,11 +179,11 @@ class OpenAICompatibleClient:
         if not self.api_key:
             raise LLMError("OPENAI_API_KEY is required for a live discovery run")
 
-    def set_sensitive_values(self, values: set[str]) -> None:
-        self._sensitive_values.update(str(value) for value in values if value)
+    def set_parameter_names(self, names: set[str] | tuple[str, ...]) -> None:
+        self._parameter_names = {str(name) for name in names}
 
-    def set_parameter_values(self, values: dict[str, str]) -> None:
-        self._parameter_values.update({str(name): str(value) for name, value in values.items()})
+    def set_task_context(self, output_names: set[str] | tuple[str, ...]) -> None:
+        self._task_outputs = {str(name) for name in output_names}
 
     def set_completed_outputs(self, names: set[str]) -> None:
         self._completed_outputs = {str(name) for name in names}
@@ -177,6 +192,7 @@ class OpenAICompatibleClient:
         return dict(self._last_provenance)
 
     def decide(self, goal: str, observation: SurfaceObservation) -> AgentDecision:
+        del goal
         system = (
             "You operate a browser through a constrained action interface. "
             "Use only control_id and target_id values present in the observation. "
@@ -193,13 +209,10 @@ class OpenAICompatibleClient:
         )
         user = json.dumps(
             {
-                "goal": _sanitize_model_text(
-                    goal, self._sensitive_values, self._parameter_values
-                ),
-                "observation": sanitize_observation_for_model(
-                    observation, self._sensitive_values, self._parameter_values
-                ),
-                "available_parameters": sorted(self._parameter_values),
+                "goal": "<REDACTED operator goal>",
+                "observation": sanitize_observation_for_model(observation),
+                "available_parameters": sorted(self._parameter_names),
+                "task_outputs": sorted(self._task_outputs),
                 "completed_outputs": sorted(self._completed_outputs),
             },
             sort_keys=True,
@@ -261,19 +274,23 @@ def sanitize_observation_for_model(
     sensitive_values: set[str] | tuple[str, ...] = (),
     parameter_values: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Keep the provider view structural while removing runtime data."""
+    """Return only an allowlisted structural view for a model provider.
 
-    sensitive = {str(value) for value in sensitive_values if value}
-    parameters = parameter_values or {}
+    The optional arguments are retained for callers compiled against the early
+    API, but deliberately ignored: values from a regulated surface must never
+    be sent to the provider for heuristic redaction.
+    """
+
+    del sensitive_values, parameter_values
     return {
-        "url": redact_runtime_url(_sanitize_model_text(observation.url, sensitive, parameters)),
-        "title": _sanitize_model_text(observation.title, sensitive, parameters),
-        "text": _sanitize_model_text(observation.text, sensitive, parameters),
+        "url": _safe_model_url(observation.url),
+        "title": _controlled_label(observation.title),
+        "text": "<REDACTED>",
         "controls": [
             {
                 "id": control.ephemeral_id,
-                "kind": control.kind,
-                "name": _sanitize_model_text(control.name, sensitive, parameters),
+                "kind": _controlled_kind(control.kind),
+                "name": _controlled_label(control.name),
                 "locator_strategy": control.locator.strategy,
             }
             for control in observation.controls
@@ -281,7 +298,7 @@ def sanitize_observation_for_model(
         "readable_targets": [
             {
                 "id": target.ephemeral_id,
-                "text": _sanitize_model_text(target.text, sensitive, parameters),
+                "text": _controlled_label(target.text),
                 "locator_strategy": target.locator.strategy,
                 "extractable": target.locator.strategy != "text",
             }
@@ -290,27 +307,24 @@ def sanitize_observation_for_model(
     }
 
 
-def _sanitize_model_text(
-    value: str,
-    sensitive_values: set[str],
-    parameter_values: dict[str, str] | None = None,
-) -> str:
-    result = value
-    for name, actual in sorted((parameter_values or {}).items(), key=lambda item: len(item[1]), reverse=True):
-        if actual:
-            replacement = "{{" + name + "}}"
-            for variant in sorted({actual, quote(actual, safe=""), quote_plus(actual)}, key=len, reverse=True):
-                result = result.replace(variant, replacement)
-    result = redact_text(result)
-    variants = {
-        variant
-        for item in sensitive_values
-        for variant in (item, quote(item, safe=""), quote_plus(item))
-    }
-    for secret in sorted(variants, key=len, reverse=True):
-        if secret:
-            result = result.replace(secret, "<REDACTED>")
-    return result
+def _controlled_label(value: str) -> str:
+    normalized = value.strip().casefold()
+    return value if normalized in _SAFE_MODEL_LABELS else "<REDACTED>"
+
+
+def _controlled_kind(value: str) -> str:
+    return value if value.strip().casefold() in _SAFE_MODEL_KINDS else "<REDACTED>"
+
+
+def _safe_model_url(value: str) -> str:
+    parsed = urlsplit(value)
+    hostname = parsed.hostname or "<REDACTED>"
+    try:
+        port = f":{parsed.port}" if parsed.port is not None else ""
+    except ValueError:
+        port = ""
+    path = parsed.path if parsed.path in _SAFE_MODEL_PATHS else "/<REDACTED>"
+    return f"{parsed.scheme}://{hostname}{port}{path}"
 
 
 def _endpoint_host(endpoint: str) -> str:

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -95,7 +96,9 @@ def test_browser_surface_replay_reports_application_error(tmp_path, demo_origin)
 
     assert result.status is RunStatus.HARD_FAILURE
     assert result.error_code == "APP_ERROR"
-    assert (Path(result.evidence_dir) / "failure-observe.txt").exists()
+    snapshot = Path(result.evidence_dir) / "failure-observe.txt"
+    assert snapshot.exists()
+    assert json.loads(snapshot.read_text(encoding="utf-8"))["failure_kind"] == "application_error"
 
 
 def test_browser_surface_reports_unexpected_confirmation_dialog(tmp_path, demo_origin):

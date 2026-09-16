@@ -61,12 +61,15 @@ def test_capture_persists_structural_state_without_page_text(tmp_path):
     surface.page = FakePage()
     surface._sensitive_values = {"123456"}
     _screenshot, snapshot = surface.capture(tmp_path, "failure")
-    structure = json.loads(snapshot.read_text(encoding="utf-8"))
-    serialized = json.dumps(structure, ensure_ascii=False)
+    payload = json.loads(snapshot.read_text(encoding="utf-8"))
+    structure = payload["structure"]
+    serialized = json.dumps(payload, ensure_ascii=False)
 
     assert "José Núñez" not in serialized
     assert "123456" not in serialized
-    assert structure["children"][0]["id"] == "member-number"
+    assert payload["failure_kind"] == "surface_failure"
+    assert structure["children"][0]["id_hash"]
+    assert "member-number" not in serialized
     assert structure["children"][0]["error_marker"] is True
     assert "text" not in structure["children"][0]
     assert "value" not in structure["children"][0]

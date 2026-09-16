@@ -110,6 +110,20 @@ def _redact_runtime_urls(value: Any) -> Any:
     return value
 
 
+def _redact_freeform_metadata(value: Any) -> Any:
+    """Do not persist model/operator prose that may contain regulated data."""
+
+    if isinstance(value, dict):
+        result = {str(key): _redact_freeform_metadata(item) for key, item in value.items()}
+        for key in ("goal", "reason", "message", "description"):
+            if isinstance(result.get(key), str):
+                result[key] = "<REDACTED>"
+        return result
+    if isinstance(value, list):
+        return [_redact_freeform_metadata(item) for item in value]
+    return value
+
+
 class EvidenceRecorder:
     """Append-only run evidence with redaction at the persistence boundary."""
 
@@ -144,10 +158,12 @@ class EvidenceRecorder:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
 
     def redact_payload(self, payload: Any) -> Any:
-        return _redact_runtime_urls(_redact_control_metadata(_redact_readable_targets(
-            _redact_sensitive_values(
-                _redact_sensitive_names(redact_value("payload", payload), self.sensitive_names),
-                self.sensitive_values,
+        return _redact_freeform_metadata(_redact_runtime_urls(_redact_control_metadata(
+            _redact_readable_targets(
+                _redact_sensitive_values(
+                    _redact_sensitive_names(redact_value("payload", payload), self.sensitive_names),
+                    self.sensitive_values,
+                )
             )
         )))
 

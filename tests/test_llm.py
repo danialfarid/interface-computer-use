@@ -30,6 +30,17 @@ def test_model_observation_keeps_structure_without_runtime_values():
     assert safe["controls"][0]["locator_strategy"] == "label"
     assert safe["readable_targets"][0]["id"] == "target-0"
 
+    lower_ascii = SurfaceObservation(
+        "http://127.0.0.1:8765/member/alice-smith",
+        "alice smith",
+        "alice smith current savings balance $1,240.50",
+        (Control("control-0", "input", "alice smith", Locator("label", "alice smith")),),
+        (),
+    )
+    lower_safe = sanitize_observation_for_model(lower_ascii)
+    assert "alice smith" not in json.dumps(lower_safe)
+    assert lower_safe["url"] == "http://127.0.0.1:8765/<REDACTED>"
+
 
 def test_provider_request_uses_sanitized_observation_and_records_provenance(monkeypatch):
     response_payload = {
@@ -65,7 +76,8 @@ def test_provider_request_uses_sanitized_observation_and_records_provenance(monk
         model="test-model",
         endpoint="https://provider.example.test/v1/chat/completions",
     )
-    client.set_sensitive_values({"José Núñez", "$1,240.50"})
+    client.set_parameter_names({"member_id"})
+    client.set_task_context({"balance"})
 
     decision = client.decide("look up José Núñez", _sensitive_observation())
     body = json.loads(requests[0][0].data)

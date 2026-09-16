@@ -301,6 +301,17 @@ class CapabilityArtifact:
                 raise ValueError(f"step {step.id!r} must have a positive timeout")
             _validate_safe_metadata(step.id, f"step {step.id} id")
             _validate_safe_metadata(step.description, f"step {step.id} description")
+            if step.action is ActionType.NAVIGATE and not step.value:
+                raise ValueError(f"navigate step {step.id} requires a value")
+            if step.action in {
+                ActionType.CLICK,
+                ActionType.FILL,
+                ActionType.PRESS,
+                ActionType.EXTRACT,
+            } and step.target is None:
+                raise ValueError(f"{step.action.value} step {step.id} requires a target")
+            if step.action in {ActionType.FILL, ActionType.PRESS} and not step.value:
+                raise ValueError(f"{step.action.value} step {step.id} requires a value")
             if step.target is not None:
                 if step.target.strategy == "text":
                     raise ValueError(f"step {step.id} cannot persist a text locator")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -10,7 +11,6 @@ from urllib.parse import urljoin, urlsplit
 
 from .models import ActionType, Locator
 from .policy import PolicyViolation
-from .redaction import redact_text
 
 
 class SurfaceError(RuntimeError):
@@ -94,6 +94,7 @@ class BrowserSurface:
         self._websocket_route_installed = False
         self._sensitive_values: set[str] = set()
         self._page_error: str | None = None
+        self._failure_kind = "surface_failure"
         self.page.on("dialog", self._handle_dialog)
         self.page.on("pageerror", self._handle_page_error)
 
@@ -184,6 +185,7 @@ class BrowserSurface:
             return
         except Exception as exc:
             self._blocked_navigation_error = exc
+            self._failure_kind = "policy_blocked"
             route.abort(error_code="blockedbyclient")
             return
         route.continue_()
@@ -198,6 +200,7 @@ class BrowserSurface:
             self._navigation_guard(_websocket_policy_url(str(websocket.url)))
         except Exception as exc:
             self._blocked_navigation_error = exc
+            self._failure_kind = "policy_blocked"
             websocket.close(code=1008, reason="WebSocket URL is not allowlisted")
             return
         websocket.connect_to_server()
@@ -207,6 +210,7 @@ class BrowserSurface:
             text = str(self.page.locator("body").inner_text())
             self._raise_pending_dialog("observe")
             if "application error" in text.lower():
+                self._failure_kind = "application_error"
                 raise SurfaceAppError("the page reported an application error")
             title = str(self.page.title())
             controls = tuple(self._controls())
@@ -236,9 +240,12 @@ class BrowserSurface:
         message = self._page_error
         self._page_error = None
         if "websocket url is not allowlisted" in message.lower():
+            self._failure_kind = "policy_blocked"
             raise PolicyViolation("WebSocket URL is not allowlisted")
         if "disabled by policy" in message.lower() or "not allowlisted" in message.lower():
+            self._failure_kind = "policy_blocked"
             raise PolicyViolation(f"browser context was blocked by policy: {message}")
+        self._failure_kind = "application_error"
         raise SurfaceAppError(f"{action} produced a page error: {message}")
 
     def _raise_pending_dialog(self, action: str) -> None:
@@ -246,6 +253,7 @@ class BrowserSurface:
             return
         message = self._unexpected_dialog
         self._unexpected_dialog = None
+        self._failure_kind = "unexpected_dialog"
         raise UnexpectedDialog(f"{action} encountered an unexpected browser dialog: {message}")
 
     def _take_blocked_navigation(self) -> Exception | None:
@@ -522,28 +530,32 @@ class BrowserSurface:
             }"""
         )
         snapshot.write_text(
-            json.dumps(_sanitize_snapshot_structure(structure, self._sensitive_values), sort_keys=True),
+            json.dumps(
+                {
+                    "failure_kind": getattr(self, "_failure_kind", "surface_failure"),
+                    "structure": _sanitize_snapshot_structure(structure),
+                },
+                sort_keys=True,
+            ),
             encoding="utf-8",
         )
         return None, snapshot
 
 
-def _sanitize_snapshot_structure(value: Any, sensitive_values: set[str]) -> Any:
+def _sanitize_snapshot_structure(value: Any) -> Any:
     if isinstance(value, dict):
         allowed = {"tag", "id", "role", "state", "error_marker", "children"}
         result = {
-            key: _sanitize_snapshot_structure(item, sensitive_values)
+            key: _sanitize_snapshot_structure(item)
             for key, item in value.items()
             if key in allowed
         }
         if isinstance(result.get("id"), str):
-            redacted = redact_text(result["id"])
-            for sensitive in sorted(sensitive_values, key=len, reverse=True):
-                redacted = redacted.replace(sensitive, "<REDACTED>")
-            result["id"] = redacted
+            raw_id = result.pop("id")
+            result["id_hash"] = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()[:16]
         return result
     if isinstance(value, list):
-        return [_sanitize_snapshot_structure(item, sensitive_values) for item in value]
+        return [_sanitize_snapshot_structure(item) for item in value]
     return value
 
 

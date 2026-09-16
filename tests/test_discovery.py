@@ -114,6 +114,8 @@ def test_discovery_records_parameterized_steps_and_output(tmp_path):
     assert artifact.steps[1].value == "{{member_id}}" or artifact.steps[0].value == "{{member_id}}"
     assert artifact.outputs["balance"].source.strategy == "css"
     assert "1001" not in artifact.to_json()
+    assert all("enter member" not in step.description for step in artifact.steps)
+    assert all("read member" not in step.description for step in artifact.steps)
 
 
 def test_discovery_returns_business_outcome_without_crashing(tmp_path):

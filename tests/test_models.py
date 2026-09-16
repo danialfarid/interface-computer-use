@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import pytest
 
 from cua.models import (
@@ -12,6 +13,17 @@ from cua.models import (
     OutputSpec,
     ParameterSpec,
 )
+
+
+def test_published_schema_matches_runtime_step_and_output_contract():
+    schema = json.loads(
+        (Path(__file__).parents[1] / "schemas" / "capability.schema.json").read_text()
+    )
+
+    assert schema["$defs"]["output"]["properties"]["type"] == {
+        "enum": ["string", "integer"]
+    }
+    assert len(schema["$defs"]["step"]["allOf"]) == 3
 
 
 def test_capability_round_trips_without_runtime_values():
@@ -217,6 +229,32 @@ def test_capability_rejects_empty_business_outcome_fields():
     )
 
     with pytest.raises(ValueError, match="business outcomes"):
+        artifact.validate()
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        ActionStep("navigate", ActionType.NAVIGATE),
+        ActionStep("click", ActionType.CLICK),
+        ActionStep("fill", ActionType.FILL, value="value"),
+        ActionStep("press", ActionType.PRESS, Locator("role", "button:Search")),
+    ],
+)
+def test_capability_rejects_steps_missing_required_contract_fields(step):
+    artifact = CapabilityArtifact(
+        capability_id="cap",
+        name="Capability",
+        description="Description",
+        surface_kind="browser",
+        target={"origin": "http://127.0.0.1:8765", "url": "http://127.0.0.1:8765/"},
+        parameters={},
+        outputs={},
+        steps=(step,),
+        checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+    )
+
+    with pytest.raises(ValueError, match="requires"):
         artifact.validate()
 
 

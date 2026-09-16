@@ -8,7 +8,7 @@ from urllib.parse import parse_qsl, quote, quote_plus, urlsplit, urlunsplit
 
 from .evidence import EvidenceRecorder
 from .handoff import HandoffCoordinator
-from .llm import AgentAction, DecisionClient, LLMError
+from .llm import AgentAction, AgentDecision, DecisionClient, LLMError
 from .models import (
     ActionStep,
     ActionType,
@@ -23,7 +23,7 @@ from .models import (
     RunStatus,
 )
 from .policy import ConfirmationRequired, GuardrailPolicy, PolicyViolation, check_action_destination
-from .redaction import redact_text, redact_url
+from .redaction import redact_url
 from .surface import SurfaceAppError, SurfaceError, SurfaceObservation, SurfaceTimeout, UnexpectedDialog
 
 
@@ -93,12 +93,12 @@ class DiscoveryRunner:
             name for name, spec in self.template.output_descriptions.items() if spec[2]
         )
         self.evidence.sensitive_values.update(self.parameter_values.values())
-        set_client_sensitive_values = getattr(self.client, "set_sensitive_values", None)
-        if callable(set_client_sensitive_values):
-            set_client_sensitive_values(set(self.parameter_values.values()))
-        set_client_parameter_values = getattr(self.client, "set_parameter_values", None)
-        if callable(set_client_parameter_values):
-            set_client_parameter_values(dict(self.parameter_values))
+        set_client_parameter_names = getattr(self.client, "set_parameter_names", None)
+        if callable(set_client_parameter_names):
+            set_client_parameter_names(set(self.parameter_values))
+        set_client_task_context = getattr(self.client, "set_task_context", None)
+        if callable(set_client_task_context):
+            set_client_task_context(set(self.template.output_descriptions))
         set_sensitive_values = getattr(self.surface, "set_sensitive_values", None)
         if callable(set_sensitive_values):
             set_sensitive_values(set(self.parameter_values.values()))
@@ -165,7 +165,7 @@ class DiscoveryRunner:
                     self.evidence.event(
                         "decision",
                         step=step_number,
-                        decision=decision.to_dict(),
+                        decision=_safe_decision_payload(decision),
                         **provenance,
                     )
                     for action_number, action in enumerate(decision.actions, start=1):
@@ -392,7 +392,7 @@ class DiscoveryRunner:
                 locator,
                 output_name,
                 risk=action.risk,
-                description=_safe_description(action.reason, self.parameter_values),
+                description=_controlled_action_description(action.action),
             )
             self.policy.check_step(extract_step, confirmed=self.confirmed_risky)
             previous_source = self.output_sources.get(output_name)
@@ -403,9 +403,6 @@ class DiscoveryRunner:
             value = self.surface.extract(locator)
             self.output_sources[output_name] = locator
             self.evidence.sensitive_values.add(value)
-            set_client_sensitive_values = getattr(self.client, "set_sensitive_values", None)
-            if callable(set_client_sensitive_values):
-                set_client_sensitive_values({value})
             set_sensitive_values = getattr(self.surface, "set_sensitive_values", None)
             if callable(set_sensitive_values):
                 set_sensitive_values({value})
@@ -433,14 +430,18 @@ class DiscoveryRunner:
             locator,
             artifact_value,
             risk=action.risk,
-            description=_safe_description(action.reason, self.parameter_values),
+            description=_controlled_action_description(action.action),
         )
         self.policy.check_step(step, confirmed=self.confirmed_risky)
         check_action_destination(self.policy, self.surface, step)
         self.surface.perform(action.action, locator, runtime_value, step.timeout_ms)
         self.policy.check_url(self.surface.url)
         self.recorded_steps.append(step)
-        self.evidence.event("action", step=step.to_dict(), reason=action.reason)
+        self.evidence.event(
+            "action",
+            step=step.to_dict(),
+            reason=_controlled_action_description(action.action),
+        )
 
     def _checkpoint_matches(self, observation: SurfaceObservation) -> bool:
         checkpoint = self.template.checkpoint
@@ -517,7 +518,7 @@ class DiscoveryRunner:
                     if step.value is not None
                     else None
                 ),
-                description=_safe_description(step.description, self.parameter_values),
+                description=_controlled_action_description(step.action),
             )
         self.recorded_steps.append(recorded)
 
@@ -667,8 +668,24 @@ class DiscoveryRunner:
         return self._failure(status, step, code, str(exc))
 
 
-def _safe_description(value: str, parameter_values: dict[str, str]) -> str:
-    return redact_text(_parameterize_text(value, parameter_values))
+def _controlled_action_description(action: ActionType) -> str:
+    return {
+        ActionType.NAVIGATE: "Navigate to the approved destination.",
+        ActionType.CLICK: "Click the identified control.",
+        ActionType.FILL: "Fill the identified control.",
+        ActionType.PRESS: "Press the identified control.",
+        ActionType.WAIT: "Wait for the bounded timeout.",
+        ActionType.EXTRACT: "Extract the declared output.",
+    }[action]
+
+
+def _safe_decision_payload(decision: AgentDecision) -> dict[str, object]:
+    payload = decision.to_dict()
+    payload["message"] = "<REDACTED>"
+    for action in payload.get("actions", []):
+        if isinstance(action, dict):
+            action["reason"] = "<REDACTED>"
+    return payload
 
 
 def _parameterize_text(value: str, parameter_values: dict[str, str]) -> str:
