@@ -151,6 +151,14 @@ def test_evidence_redacts_arbitrary_query_values(tmp_path):
     assert "Jos%C3%A9" not in payload
 
 
+def test_evidence_redacts_unreviewed_query_keys(tmp_path):
+    evidence = EvidenceRecorder(tmp_path)
+    evidence.event("observation", url="http://127.0.0.1:8765/member?alice-smith=1001")
+
+    record = json.loads(evidence.log_path.read_text(encoding="utf-8"))
+    assert "alice-smith" not in json.dumps(record["payload"])
+
+
 def test_evidence_redacts_uri_encoded_sensitive_values(tmp_path):
     evidence = EvidenceRecorder(tmp_path)
     evidence.sensitive_values.add("ab cd")

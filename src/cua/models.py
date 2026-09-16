@@ -324,7 +324,7 @@ class CapabilityArtifact:
             raise ValueError("target must include url and origin")
         _validate_uri(self.target["url"], "target url")
         _validate_uri(self.target["origin"], "target origin")
-        _validate_parameterized_query(self.target["url"], "target url")
+        _validate_parameterized_url(self.target["url"], "target url")
         for target_name, target_value in self.target.items():
             _validate_safe_metadata(target_name, "target field name")
             if target_name not in {"url", "origin"}:
@@ -387,7 +387,7 @@ class CapabilityArtifact:
             if step.value is not None:
                 _validate_placeholders(step.value, parameter_names, f"step {step.id} value")
                 if step.action is ActionType.NAVIGATE:
-                    _validate_parameterized_query(step.value, f"step {step.id} value")
+                    _validate_parameterized_url(step.value, f"step {step.id} value")
             if step.action is ActionType.FILL and _PARAMETER_PLACEHOLDER.fullmatch(step.value or "") is None:
                 raise ValueError(f"fill step {step.id} must use one declared parameter placeholder")
             if step.action is ActionType.EXTRACT:
@@ -578,10 +578,36 @@ def _validate_uri(value: str, owner: str) -> None:
         raise ValueError(f"{owner} must be a URI")
 
 
-def _validate_parameterized_query(value: str, owner: str) -> None:
-    for _key, item in parse_qsl(urlsplit(value).query, keep_blank_values=True):
+def _validate_parameterized_url(value: str, owner: str) -> None:
+    parsed = urlsplit(value)
+    for segment in unquote(parsed.path).split("/"):
+        if segment and _PARAMETER_PLACEHOLDER.fullmatch(segment) is None and segment not in _SAFE_DEMO_PATH_SEGMENTS:
+            raise ValueError(f"{owner} path segments must be reviewed routes or declared placeholders")
+    for key, item in parse_qsl(parsed.query, keep_blank_values=True):
+        if key not in _SAFE_DEMO_QUERY_KEYS:
+            raise ValueError(f"{owner} query keys must be on the reviewed allowlist")
         if _PARAMETER_PLACEHOLDER.fullmatch(item) is None:
             raise ValueError(f"{owner} query values must be declared placeholders")
+
+
+_SAFE_DEMO_QUERY_KEYS = frozenset({"member"})
+_SAFE_DEMO_PATH_SEGMENTS = frozenset(
+    {
+        "member",
+        "runtime",
+        "validation",
+        "permission-denied",
+        "session-expired",
+        "app-error",
+        "confirmation",
+        "hostile",
+        "worker.js",
+        "shared.js",
+        "redirect",
+        "redirect-one",
+        "redirect-two",
+    }
+)
 
 
 _SAFE_DEMO_IDS = frozenset(

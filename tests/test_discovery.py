@@ -625,7 +625,21 @@ def test_discovery_rejects_sensitive_target_query_values(tmp_path):
 def test_discovery_rejects_unparameterized_target_query_values():
     with pytest.raises(SurfaceError, match="unparameterized navigation query data"):
         _parameterize_persisted_value(
-            "http://127.0.0.1:8765/?note=alice-smith",
+            "http://127.0.0.1:8765/?member=alice-smith",
+            {"member_id": "1001"},
+            ActionType.NAVIGATE,
+        )
+
+    with pytest.raises(SurfaceError, match="unparameterized navigation path data"):
+        _parameterize_persisted_value(
+            "http://127.0.0.1:8765/member/alice-smith",
+            {"member_id": "1001"},
+            ActionType.NAVIGATE,
+        )
+
+    with pytest.raises(SurfaceError, match="unapproved navigation query key"):
+        _parameterize_persisted_value(
+            "http://127.0.0.1:8765/member?alice-smith=1001",
             {"member_id": "1001"},
             ActionType.NAVIGATE,
         )

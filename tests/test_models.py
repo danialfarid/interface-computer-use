@@ -259,7 +259,7 @@ def test_capability_rejects_unparameterized_target_query_values():
         surface_kind="browser",
         target={
             "origin": "http://127.0.0.1:8765",
-            "url": "http://127.0.0.1:8765/?note=alice-smith",
+            "url": "http://127.0.0.1:8765/?member=alice-smith",
         },
         parameters={"member_id": ParameterSpec("string", "Member identifier")},
         outputs={},
@@ -269,6 +269,27 @@ def test_capability_rejects_unparameterized_target_query_values():
 
     with pytest.raises(ValueError, match="query values must be declared placeholders"):
         artifact.validate()
+
+
+def test_capability_rejects_unreviewed_path_and_query_key_data():
+    for url in (
+        "http://127.0.0.1:8765/member/alice-smith",
+        "http://127.0.0.1:8765/member?alice-smith={{member_id}}",
+    ):
+        artifact = CapabilityArtifact(
+            capability_id="cap",
+            name="Capability",
+            description="Description",
+            surface_kind="browser",
+            target={"origin": "http://127.0.0.1:8765", "url": url},
+            parameters={"member_id": ParameterSpec("string", "Member identifier")},
+            outputs={},
+            steps=(ActionStep("wait", ActionType.WAIT),),
+            checkpoint=Checkpoint(CheckpointKind.TEXT_PRESENT, "ready", "ready"),
+        )
+
+        with pytest.raises(ValueError):
+            artifact.validate()
 
 
 def test_capability_allows_parameterized_target_query_values():

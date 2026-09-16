@@ -724,7 +724,7 @@ def _parameterize_persisted_value(
         if value not in parameter_values.values():
             raise SurfaceError("refusing to persist an unparameterized fill value")
     if action is ActionType.NAVIGATE:
-        _reject_unparameterized_query(result)
+        _reject_unparameterized_url(result)
         if redact_url(result) != result:
             raise SurfaceError("refusing to persist a navigation containing credentials or a secret")
     return result
@@ -752,7 +752,32 @@ def _parameterize_url(value: str, parameter_values: dict[str, str]) -> str:
     )
 
 
-def _reject_unparameterized_query(value: str) -> None:
-    for _key, item in parse_qsl(urlsplit(value).query, keep_blank_values=True):
+def _reject_unparameterized_url(value: str) -> None:
+    parsed = urlsplit(value)
+    for segment in parsed.path.split("/"):
+        if segment and _PARAMETER.fullmatch(segment) is None and segment not in _SAFE_DEMO_PATH_SEGMENTS:
+            raise SurfaceError("refusing to persist unparameterized navigation path data")
+    for key, item in parse_qsl(parsed.query, keep_blank_values=True):
+        if key != "member":
+            raise SurfaceError("refusing to persist unapproved navigation query key")
         if _PARAMETER.fullmatch(item) is None:
             raise SurfaceError("refusing to persist unparameterized navigation query data")
+
+
+_SAFE_DEMO_PATH_SEGMENTS = frozenset(
+    {
+        "member",
+        "runtime",
+        "validation",
+        "permission-denied",
+        "session-expired",
+        "app-error",
+        "confirmation",
+        "hostile",
+        "worker.js",
+        "shared.js",
+        "redirect",
+        "redirect-one",
+        "redirect-two",
+    }
+)

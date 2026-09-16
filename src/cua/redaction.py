@@ -28,6 +28,7 @@ _PII_PATTERNS = (
     re.compile(r"(?i)\b(?:link|button|input):[a-z]{2,}\s+[a-z]{2,}\b"),
     re.compile(r"(?im)\b(?:member\s+)?(?:name|address)\s*(?:[:\t]|\r?\n)\s*[^\r\n]+"),
 )
+_SAFE_QUERY_KEYS = frozenset({"member"})
 
 
 def redact_text(value: str) -> str:
@@ -65,7 +66,10 @@ def redact_url(value: str) -> str:
 
     parsed = urlsplit(value)
     query = [
-        (key, item if _PLACEHOLDER.fullmatch(item) else "<REDACTED>")
+        (
+            key if key in _SAFE_QUERY_KEYS else "<REDACTED>",
+            item if _PLACEHOLDER.fullmatch(item) else "<REDACTED>",
+        )
         for key, item in parse_qsl(parsed.query, keep_blank_values=True)
     ]
     safe_netloc = parsed.netloc.rsplit("@", 1)[-1]
@@ -85,7 +89,8 @@ def redact_runtime_url(value: str) -> str:
     query = []
     for key, item in parse_qsl(parsed.query, keep_blank_values=True):
         safe_item = item if _PLACEHOLDER.fullmatch(item) else "<REDACTED>"
-        query.append(f"{quote(key, safe='')}={quote(safe_item, safe='{}')}")
+        safe_key = key if key in _SAFE_QUERY_KEYS else "<REDACTED>"
+        query.append(f"{quote(safe_key, safe='')}={quote(safe_item, safe='{}')}")
     return urlunsplit(
         (parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "&".join(query), "")
     )
