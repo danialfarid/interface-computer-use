@@ -1,5 +1,7 @@
 # Computer-Use Automation System
 
+[![Tests](https://github.com/danialfarid/interface-computer-use/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/danialfarid/interface-computer-use/actions/workflows/tests.yml)
+
 This is a small, safety-first computer-use system for the interface.ai take-home assignment. It uses a synthetic, intentionally legacy-looking member-services portal as its live target. The system has one discovery path (LLM observes the browser and chooses constrained actions) and one production path (a saved capability artifact replays without an LLM).
 
 Start with the [five-minute walkthrough](#five-minute-reviewer-walkthrough-after-setup), then the [requirement-to-evidence map](REVIEW.md). Design decisions and explicit limitations are in [REPORT.md](REPORT.md).
